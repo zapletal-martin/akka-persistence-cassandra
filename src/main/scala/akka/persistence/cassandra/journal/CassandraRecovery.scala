@@ -16,36 +16,24 @@ trait CassandraRecovery extends ActorLogging {
 
   implicit lazy val replayDispatcher = context.system.dispatchers.lookup(replayDispatcherId)
 
-  def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: (PersistentRepr) => Unit): Future[Unit] = {
-    log.debug("asyncReplyMessages {} {} {} {}", persistenceId, fromSequenceNr, toSequenceNr, max)
-    Future {
-      replayMessages(persistenceId, fromSequenceNr, toSequenceNr, max)(replayCallback)
-    }
+  def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: (PersistentRepr) => Unit): Future[Unit] = Future {
+    replayMessages(persistenceId, fromSequenceNr, toSequenceNr, max)(replayCallback)
   }
 
-  def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = {
-    log.debug("asyncReadHighestSequenceNr {} {}", persistenceId, fromSequenceNr)
-    Future {
+  def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = Future {
       readHighestSequenceNr(persistenceId, fromSequenceNr)
-    }
   }
 
   def readHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Long = {
-    log.debug("readHighestSequenceNr {} {}", persistenceId, fromSequenceNr)
-    val result = new MessageIterator(persistenceId, math.max(1L, fromSequenceNr), Long.MaxValue, Long.MaxValue).foldLeft(fromSequenceNr) { case (acc, msg) => msg.sequenceNr }
-    log.debug(s"Highest sequence number $result")
-    result
+    new MessageIterator(persistenceId, math.max(1L, fromSequenceNr), Long.MaxValue, Long.MaxValue).foldLeft(fromSequenceNr) { case (acc, msg) => msg.sequenceNr }
   }
 
   def readLowestSequenceNr(persistenceId: String, fromSequenceNr: Long): Long = {
-    log.debug("readLowestSequenceNr {} {}", persistenceId, fromSequenceNr)
     new MessageIterator(persistenceId, fromSequenceNr, Long.MaxValue, Long.MaxValue).find(!_.deleted).map(_.sequenceNr).getOrElse(fromSequenceNr)
   }
 
   def replayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: (PersistentRepr) => Unit): Unit = {
-    log.debug("replayMessages {} {} {} {}", persistenceId, fromSequenceNr, toSequenceNr, max)
     new MessageIterator(persistenceId, fromSequenceNr, toSequenceNr, max).foreach( msg => {
-      log.debug(s"Replaying $msg")
       replayCallback(msg)
     })
   }
@@ -106,20 +94,13 @@ trait CassandraRecovery extends ActorLogging {
     var iter = newIter()
 
     def newIter() = {
-      log.debug(s"id=$persistenceId partition=$currentPnr from=$fromSnr to=$toSnr")
       session.execute(preparedSelectMessages.bind(persistenceId, currentPnr: JLong, fromSnr: JLong, toSnr: JLong)).iterator
     }
 
     def inUse: Boolean = {
       val execute: ResultSet = session.execute(preparedCheckInUse.bind(persistenceId, currentPnr: JLong))
-      if (execute.isExhausted) {
-        false
-      } else {
-        val used = execute.one().getBool("used")
-        log.debug(s"In use partition $currentPnr : $used")
-        used
-      }
-
+      if (execute.isExhausted) false
+      else execute.one().getBool("used")
     }
 
     @annotation.tailrec
@@ -129,19 +110,16 @@ trait CassandraRecovery extends ActorLogging {
         true
       } else if (rcnt == 0 && !inUse) {
         // empty partition and inUse not set, empty partitions are a result of deletions or large persistAll calls
-        log.debug(s"Empty partition and not in use $currentPnr")
         false
       } else if (rcnt < maxResultSize) {
         // all entries consumed, try next partition
         currentPnr += 1
-        log.debug(s"Moving to partition $currentPnr")
         fromSnr = currentSnr
         rcnt = 0
         iter = newIter()
         hasNext
       } else {
         // max result set size reached, continue with same partition moving the fromSnr forward
-        log.debug(s"Max results size reached, moving along a partition $currentPnr")
         fromSnr = currentSnr
         rcnt = 0
         iter = newIter()

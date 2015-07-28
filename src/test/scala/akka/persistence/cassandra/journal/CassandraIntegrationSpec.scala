@@ -246,6 +246,24 @@ class CassandraIntegrationSpec extends TestKit(ActorSystem("test", config)) with
         expectMsgAllOf(s"a-${i}", i, true)
       }
     }
+    "not replay messages deleted from the +1 partition" in {
+      val persistenceId = UUID.randomUUID().toString
+      val probe = TestProbe()
+      val deleteProbe = TestProbe()
+      subscribeToRangeDeletion(deleteProbe)
+      val processorAtomic = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+
+      processorAtomic ! List("a-1", "a-2", "a-3", "a-4", "a-5", "a-6")
+      1L to 6L foreach { i =>
+        expectMsgAllOf(s"a-${i}", i, false)
+      }
+      processorAtomic ! DeleteTo(5L)
+      awaitRangeDeletion(deleteProbe)
+
+      val testProbe = TestProbe()
+      val processor2 = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, testProbe.ref))
+      testProbe.expectMsgAllOf(s"a-6", 6, true)
+    }
   }
 
   "A processor" should {

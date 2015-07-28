@@ -77,15 +77,18 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
 
   private def asyncDeleteMessages(messageIds: Seq[MessageId]): Future[Unit] = executeBatch { batch =>
     messageIds.foreach { mid =>
-      val stmt =
-        preparedDeletePermanent.bind(mid.persistenceId, partitionNr(mid.sequenceNr): JLong, mid.sequenceNr: JLong)
+      val firstPnr: JLong = partitionNr(mid.sequenceNr)
+      val stmt = preparedDeletePermanent.bind(mid.persistenceId, firstPnr: JLong, mid.sequenceNr: JLong)
+      // the message could be in next partition as a result of an AtomicWrite, alternative is a read before write
+      val stmt2 = preparedDeletePermanent.bind(mid.persistenceId, firstPnr+1: JLong, mid.sequenceNr: JLong)
       batch.add(stmt)
+      batch.add(stmt2)
     }
   }
 
   def asyncDeleteMessagesTo(persistenceId: String, toSequenceNr: Long): Future[Unit] = {
     val fromSequenceNr = readLowestSequenceNr(persistenceId, 1L)
-    val asyncDeletions = (fromSequenceNr to toSequenceNr).grouped(persistence.settings.journal.maxDeletionBatchSize).map { group =>
+    val asyncDeletions = (fromSequenceNr to toSequenceNr).grouped(persistence.settings.journal.maxDeletionBatchSize / 2).map { group =>
       asyncDeleteMessages(group map (MessageId(persistenceId, _)))
     }
     Future.sequence(asyncDeletions).map(_ => ())
