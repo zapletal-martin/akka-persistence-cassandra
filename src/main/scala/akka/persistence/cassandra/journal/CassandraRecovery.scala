@@ -135,9 +135,9 @@ trait CassandraRecovery extends ActorLogging {
     }
 
     private def sequenceNrMin(partitionNr: Long): Long =
-      partitionNr * maxPartitionSize + 1L
+      partitionNr * targetPartitionSize + 1L
 
     private def sequenceNrMax(partitionNr: Long): Long =
-      (partitionNr + 1L) * maxPartitionSize
+      (partitionNr + 1L) * targetPartitionSize
   }
 }

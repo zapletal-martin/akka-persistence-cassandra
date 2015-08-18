@@ -101,10 +101,10 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
   }
 
   def partitionNr(sequenceNr: Long): Long =
-    (sequenceNr - 1L) / maxPartitionSize
+    (sequenceNr - 1L) / targetPartitionSize
 
   private def partitionNew(sequenceNr: Long): Boolean =
-    (sequenceNr - 1L) % maxPartitionSize == 0L
+    (sequenceNr - 1L) % targetPartitionSize == 0L
 
   private def persistentToByteBuffer(p: PersistentRepr): ByteBuffer =
     ByteBuffer.wrap(serialization.serialize(p).get)
