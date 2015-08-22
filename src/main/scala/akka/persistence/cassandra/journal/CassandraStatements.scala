@@ -52,6 +52,15 @@ trait CassandraStatements {
        partition_nr = ?
      """
 
+  def selectHighestSequence =
+    s"""
+       SELECT sequence_nr FROM ${tableName} WHERE
+       persistence_id = ? AND
+       partition_nr = ?
+       ORDER BY sequence_nr
+       DESC LIMIT 1
+     """
+
   def writeInUse =
     s"""
        INSERT INTO ${tableName} (persistence_id, partition_nr, used)
