@@ -96,7 +96,7 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
     val partitionInfo = (lowestPartition to highestPartition).map(highestSequence(persistenceId, _, toSequenceNr))
 
     val asyncDeletions = partitionInfo.map( future => future.flatMap( pi => {
-      Future.sequence((pi.minSequenceNr to pi.maxSequenceNr).grouped(persistence.settings.journal.maxDeletionBatchSize).map { group => {
+      Future.sequence((pi.minSequenceNr to pi.maxSequenceNr).grouped(config.maxMessageBatchSize).map { group => {
           asyncDeleteMessages(pi.partitionNr, group map (MessageId(persistenceId, _)))
         }
       })
