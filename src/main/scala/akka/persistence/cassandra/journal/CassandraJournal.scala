@@ -16,7 +16,7 @@ import akka.serialization.SerializationExtension
 import com.datastax.driver.core._
 import com.datastax.driver.core.utils.Bytes
 
-class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with CassandraStatements {
+class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with CassandraStatements with QuerySubscriptions {
 
   val config = new CassandraJournalConfig(context.system.settings.config.getConfig("cassandra-journal"))
   val serialization = SerializationExtension(context.system)
@@ -42,6 +42,8 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
   val preparedCheckInUse = session.prepare(selectInUse).setConsistencyLevel(readConsistency)
   val preparedWriteInUse = session.prepare(writeInUse)
   val preparedSelectHighestPartition = session.prepare(selectHighestSequence).setConsistencyLevel(readConsistency)
+  
+  override def receivePluginInternal: Receive = handleQuerySubscriptions
 
   def asyncWriteMessages(messages: Seq[AtomicWrite]): Future[Seq[Try[Unit]]] = {
     // we need to preserve the order / size of this sequence even though we don't map
