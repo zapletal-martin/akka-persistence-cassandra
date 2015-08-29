@@ -4,10 +4,14 @@ import java.lang.{ Long => JLong }
 import java.nio.ByteBuffer
 
 import scala.collection.immutable.Seq
+import scala.collection.JavaConverters._
 import scala.concurrent._
 import scala.math.min
 import scala.util.{Success, Failure, Try}
 
+import akka.actor.DeadLetterSuppression
+import akka.persistence.cassandra.journal.CassandraJournal.{CurrentAllPersistenceIds,
+GetCurrentAllPersistenceIds}
 import akka.persistence.journal.AsyncWriteJournal
 import akka.persistence._
 import akka.persistence.cassandra._
@@ -16,7 +20,7 @@ import akka.serialization.SerializationExtension
 import com.datastax.driver.core._
 import com.datastax.driver.core.utils.Bytes
 
-class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with CassandraStatements with QuerySubscriptions {
+class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with CassandraStatements {
 
   val config = new CassandraJournalConfig(context.system.settings.config.getConfig("cassandra-journal"))
   val serialization = SerializationExtension(context.system)
@@ -42,8 +46,12 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
   val preparedCheckInUse = session.prepare(selectInUse).setConsistencyLevel(readConsistency)
   val preparedWriteInUse = session.prepare(writeInUse)
   val preparedSelectHighestPartition = session.prepare(selectHighestSequence).setConsistencyLevel(readConsistency)
-  
-  override def receivePluginInternal: Receive = handleQuerySubscriptions
+  val preparedSelectDistinctPersistenceIds = session.prepare(selectDistinctPersistenceIds).setConsistencyLevel(readConsistency)
+
+  override def receivePluginInternal: Receive = {
+    case GetCurrentAllPersistenceIds ⇒
+      sender() ! CurrentAllPersistenceIds(session.execute(preparedSelectDistinctPersistenceIds.bind()).all().asScala.map(_.getString("persistence_id")).toSet)
+  }
 
   def asyncWriteMessages(messages: Seq[AtomicWrite]): Future[Seq[Try[Unit]]] = {
     // we need to preserve the order / size of this sequence even though we don't map
@@ -63,7 +71,8 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
     val promise: Promise[Seq[Try[Unit]]] = Promise[Seq[Try[Unit]]]()
 
     Future.sequence(batchStatements).onComplete {
-      case Success(_) => promise.complete(Success(result))
+      case Success(_) =>
+        promise.complete(Success(result))
       case Failure(e) => promise.failure(e)
     }
 
@@ -149,4 +158,9 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
   private case class SerializedAtomicWrite(persistenceId: String, payload: Seq[Serialized])
   private case class Serialized(sequenceNr: Long, serialized: ByteBuffer)
   private case class PartitionInfo(partitionNr: Long, minSequenceNr: Long, maxSequenceNr: Long)
+}
+
+object CassandraJournal {
+  case object GetCurrentAllPersistenceIds
+  case class CurrentAllPersistenceIds(allPersistenceIds: Set[String]) extends DeadLetterSuppression
 }

@@ -32,7 +32,13 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka"      %% "akka-persistence"                    % "2.4.0-RC1",
   "com.typesafe.akka"      %% "akka-persistence-query-experimental" % "2.4.0-RC1",
   "com.typesafe.akka"      %% "akka-stream-experimental"            % "1.0",
+  "com.typesafe.akka"      %% "akka-stream-testkit-experimental"    % "1.0",
+  "org.iq80.leveldb"            % "leveldb"          % "0.7",
+"org.fusesource.leveldbjni"   % "leveldbjni-all"   % "1.8",
+  "com.typesafe.akka"      %% "akka-cluster"                % "2.4.0-RC1"  % "test",
   "com.typesafe.akka"      %% "akka-persistence-tck"                % "2.4.0-RC1"  % "test",
+  "com.typesafe.akka"      %% "akka-testkit"                        % "2.4.0-RC1"  % "test",
+  "com.typesafe.akka"      %% "akka-multi-node-testkit"             % "2.4.0-RC1"  % "test",
   "org.scalatest"          %% "scalatest"                           % "2.1.4"      % "test",
   "org.cassandraunit"       % "cassandra-unit"                      % "2.0.2.2"    % "test"
 )

@@ -1,40 +1,55 @@
 package akka.persistence.cassandra.query.journal
 
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
+import scala.concurrent.duration._
+
+import akka.actor.{DeadLetterSuppression, ActorLogging, ActorRef, Props}
 import akka.persistence.Persistence
-import akka.persistence.cassandra.journal.QuerySubscriptions.SubscribeAllPersistenceIdsEvent
+import akka.persistence.cassandra.journal.CassandraJournal.{CurrentAllPersistenceIds,
+GetCurrentAllPersistenceIds}
+import akka.persistence.cassandra.query.journal.AllPersistenceIdsPublisher.Update
+import akka.stream.actor.ActorPublisherMessage.{Cancel, SubscriptionTimeoutExceeded, Request}
 import akka.stream.actor.{ActorPublisherMessage, ActorPublisher}
-import akka.stream.actor.ActorPublisherMessage.{SubscriptionTimeoutExceeded, Cancel, Request}
+import akka.util.Timeout
 
-/**
- * INTERNAL API
- */
 private[journal] object AllPersistenceIdsPublisher {
-  def props(liveQuery: Boolean, maxBufSize: Int, writeJournalPluginId: String): Props =
-    Props(new AllPersistenceIdsPublisher(liveQuery, maxBufSize, writeJournalPluginId))
+  def props(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String): Props =
+    Props(new AllPersistenceIdsPublisher(refreshInterval, maxBufSize, writeJournalPluginId))
 
-  private case object Continue
+  case object Update
 }
 
-/**
- * INTERNAL API
- */
-private[journal] class AllPersistenceIdsPublisher(liveQuery: Boolean, maxBufSize: Int, writeJournalPluginId: String)
-  extends ActorPublisher[String] with DeliveryBuffer[String] with ActorLogging {
+private[journal] class AllPersistenceIdsPublisher(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String)
+  extends ActorPublisher[String]
+  with DeliveryBuffer[String]
+  with AllPersistenceIdsStore
+  with ActorLogging {
 
   val journal: ActorRef = Persistence(context.system).journalFor(writeJournalPluginId)
 
-  def receive = init
+  val timeout = Timeout(1.seconds)
+  //TODO: FIX
+  val tickTask =
+    context.system.scheduler.schedule(timeout.duration, timeout.duration, self, Update)(context.dispatcher)
 
-  import akka.persistence.cassandra.journal.CassandraJournal
-  def init: Receive = {
+  def receive: Receive = {
+
+    case CurrentAllPersistenceIds(current) ⇒
+      val dif = diff(current)
+      addPersistenceIds(current)
+      buf ++= dif
+      deliverBuf()
+      if (streamComplete())
+        onCompleteThenStop()
+
+    case Update ⇒
+      journal ! GetCurrentAllPersistenceIds
+
     case m: ActorPublisherMessage ⇒ m match {
 
       case _: Request ⇒
-        journal ! QuerySubscriptions.SubscribeAllPersistenceIds
-        context.become(active)
+        deliverBuf()
+        if (streamComplete())
+          onCompleteThenStop()
 
       case Cancel ⇒ context.stop(self)
 
@@ -42,32 +57,9 @@ private[journal] class AllPersistenceIdsPublisher(liveQuery: Boolean, maxBufSize
     }
   }
 
-  def active: Receive = {
-    case e: SubscribeAllPersistenceIdsEvent ⇒ e match {
-
-      case QuerySubscriptions.CurrentPersistenceIds(allPersistenceIds) ⇒
-        buf ++= allPersistenceIds
-        deliverBuf()
-        if (streamComplete())
-          onCompleteThenStop()
-
-      case QuerySubscriptions.PersistenceIdAdded(persistenceId) ⇒
-        if (liveQuery) {
-          buf :+= persistenceId
-          deliverBuf()
-        }
-    }
-
-    case m: ActorPublisherMessage ⇒ m match {
-
-      case _: Request ⇒
-        deliverBuf()
-        if (streamComplete())
-          onCompleteThenStop()
-
-      case Cancel ⇒ context.stop(self)
-    }
+  override def preStart(): Unit = {
+    journal ! GetCurrentAllPersistenceIds
   }
 
-  private def streamComplete() = !liveQuery && buf.isEmpty
+  private def streamComplete() = !refreshInterval.isDefined && buf.isEmpty
 }

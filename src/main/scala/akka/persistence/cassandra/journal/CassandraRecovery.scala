@@ -21,7 +21,7 @@ trait CassandraRecovery extends ActorLogging {
   }
 
   def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = Future {
-      readHighestSequenceNr(persistenceId, fromSequenceNr)
+    readHighestSequenceNr(persistenceId, fromSequenceNr)
   }
 
   def readHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Long = {
