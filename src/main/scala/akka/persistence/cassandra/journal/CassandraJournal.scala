@@ -6,7 +6,7 @@ import java.nio.ByteBuffer
 import scala.collection.immutable.Seq
 import scala.collection.JavaConverters._
 import scala.concurrent._
-import scala.math.min
+import scala.collection.JavaConversions._
 import scala.util.{Success, Failure, Try}
 
 import akka.actor.DeadLetterSuppression
@@ -19,6 +19,7 @@ import akka.serialization.SerializationExtension
 
 import com.datastax.driver.core._
 import com.datastax.driver.core.utils.Bytes
+
 
 class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with CassandraStatements {
 
@@ -38,6 +39,15 @@ class CassandraJournal extends AsyncWriteJournal with CassandraRecovery with Cas
     }
   }
   session.execute(createTable)
+  session.execute(createConfigTable)
+
+  val persistentConfig: Map[String, String] = session.execute(selectConfig).all().toList
+    .map(row => (row.getString("property"), row.getString("value"))).toMap
+
+  persistentConfig.get(CassandraJournalConfig.MaxPartitionProperty).foreach(oldValue =>
+    require(oldValue.toInt == config.maxPartitionSize, "Can't change max-partition-size"))
+
+  session.execute(writeConfig, CassandraJournalConfig.MaxPartitionProperty, config.maxPartitionSize.toString)
 
   val preparedWriteMessage = session.prepare(writeMessage)
   val preparedConfirmMessage = session.prepare(confirmMessage)
