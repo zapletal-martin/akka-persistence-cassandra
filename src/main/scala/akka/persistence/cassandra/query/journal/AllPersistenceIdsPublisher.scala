@@ -1,15 +1,10 @@
 package akka.persistence.cassandra.query.journal
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
-import akka.actor.{DeadLetterSuppression, ActorLogging, ActorRef, Props}
-import akka.persistence.Persistence
-import akka.persistence.cassandra.journal.CassandraJournal.{CurrentAllPersistenceIds,
-GetCurrentAllPersistenceIds}
-import akka.persistence.cassandra.query.journal.AllPersistenceIdsPublisher.Update
-import akka.stream.actor.ActorPublisherMessage.{Cancel, SubscriptionTimeoutExceeded, Request}
-import akka.stream.actor.{ActorPublisherMessage, ActorPublisher}
-import akka.util.Timeout
+import akka.actor.Props
+import akka.pattern.pipe
 
 private[journal] object AllPersistenceIdsPublisher {
   def props(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String): Props =
@@ -18,48 +13,37 @@ private[journal] object AllPersistenceIdsPublisher {
   case object Update
 }
 
-private[journal] class AllPersistenceIdsPublisher(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String)
-  extends ActorPublisher[String]
-  with DeliveryBuffer[String]
-  with AllPersistenceIdsStore
-  with ActorLogging {
+//TODO: Manage multiple AllPersistenceIdsPublisher's stream state in one place
+//TODO: Buffer size limit
+//TODO: Refresh interval
+//TODO: Implementation of diff only works because set idempotence property. Will have to handle for other queries.
+//TODO: Free the implementation of buffer from interface. E.g. we want it to be a set rather than vector sometimes.
+private[journal] class AllPersistenceIdsPublisher(refreshInterval: Option[FiniteDuration], maxBufSize: Int, override val writeJournalPluginId: String)
+  extends QueryActorPublisher[String, Set[String]](refreshInterval, maxBufSize, writeJournalPluginId) {
 
-  val journal: ActorRef = Persistence(context.system).journalFor(writeJournalPluginId)
-
-  val timeout = Timeout(1.seconds)
-  //TODO: FIX
-  val tickTask =
-    context.system.scheduler.schedule(timeout.duration, timeout.duration, self, Update)(context.dispatcher)
-
-  def receive: Receive = {
-
-    case CurrentAllPersistenceIds(current) ⇒
-      val dif = diff(current)
-      addPersistenceIds(current)
-      buf ++= dif
-      deliverBuf()
-      if (streamComplete())
-        onCompleteThenStop()
-
-    case Update ⇒
-      journal ! GetCurrentAllPersistenceIds
-
-    case m: ActorPublisherMessage ⇒ m match {
-
-      case _: Request ⇒
-        deliverBuf()
-        if (streamComplete())
-          onCompleteThenStop()
-
-      case Cancel ⇒ context.stop(self)
-
-      case SubscriptionTimeoutExceeded ⇒ context.stop(self)
-    }
+  /*override protected def update(params: String): Unit = {
+    implicit val ec = context.dispatcher
+    curentAllPersistenceIds().map(_.toVector).map(BufferUpdate(_)).pipeTo(self)
   }
 
-  override def preStart(): Unit = {
-    journal ! GetCurrentAllPersistenceIds
+  override def updateBuf(buf: Vector[String], newBuf: Vector[String]): Vector[String] = {
+    val difference = newBuf.diff(buf)
+    buf ++= newIds
+  }*/
+  override protected def query(state: Set[String]): Future[Vector[String]] = {
+    implicit val ec = context.dispatcher
+    curentAllPersistenceIds().map(_.toVector)
   }
 
-  private def streamComplete() = !refreshInterval.isDefined && buf.isEmpty
+  override protected def initialState: Set[String] = Set.empty[String]
+
+  override def updateBuf(
+    buf: Vector[String],
+    newBuf: Vector[String],
+    state: Set[String]): (Vector[String], Set[String]) = {
+
+    //TODO: FIX
+    val difference = newBuf.toSet.diff(state)
+    (buf ++ difference, state ++ difference)
+  }
 }

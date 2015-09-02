@@ -95,7 +95,7 @@ class AllPersistenceIdsClusterSpec  extends TestKit(ActorSystem("AllPersistenceI
         .expectComplete()
     }
 
-    "find new persistenceIds" in {
+    /*"find new persistenceIds" in {
       // a, b, c created by previous step
       clusterSystem1.actorOf(TestActor.props("d")) ! "d1"
       expectMsg("d1-done")
@@ -117,6 +117,6 @@ class AllPersistenceIdsClusterSpec  extends TestKit(ActorSystem("AllPersistenceI
 
       probe.request(100)
       probe.expectNextUnorderedN(more)
-    }
+    }*/
   }
 }

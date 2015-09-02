@@ -7,21 +7,26 @@ import akka.stream.actor.ActorPublisher
  */
 private[journal] trait DeliveryBuffer[T] { _: ActorPublisher[T] ⇒
 
-  var buf = Vector.empty[T]
-
-  def deliverBuf(): Unit =
+  def deliverBuf(buf: Vector[T]): Vector[T] =
     if (buf.nonEmpty && totalDemand > 0) {
+      println("A")
       if (buf.size == 1) {
         // optimize for this common case
+        println("B")
         onNext(buf.head)
-        buf = Vector.empty
+        Vector.empty[T]
       } else if (totalDemand <= Int.MaxValue) {
+        println("C")
         val (use, keep) = buf.splitAt(totalDemand.toInt)
-        buf = keep
         use foreach onNext
+        keep
       } else {
+        println("D")
         buf foreach onNext
-        buf = Vector.empty
+        Vector.empty[T]
       }
+    } else {
+      println("E")
+      buf
     }
 }
