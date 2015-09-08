@@ -61,5 +61,11 @@ trait CassandraStatements {
        INSERT INTO ${tableName} (persistence_id, partition_nr, used)
        VALUES(?, ?, true)
      """
+
+  def selectDistinctPersistenceIds =
+    s"""
+       SELECT DISTINCT persistence_id, partition_nr FROM ${tableName}
+    """
+
   private def tableName = s"${config.keyspace}.${config.table}"
 }
