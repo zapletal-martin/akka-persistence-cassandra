@@ -28,7 +28,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config) extends 
   }
 
   def allPersistenceIds(hints: Seq[Hint]): Source[String, Unit] = {
-    Source.actorPublisher[String](AllPersistenceIdsPublisher.props(refreshInterval(hints), maxBufSize, writeJournalPluginId))
+    Source.actorPublisher[String](AllPersistenceIdsPublisher.props(refreshInterval(hints), maxBufSize))
       .mapMaterializedValue(_ ⇒ ())
       .named("allPersistenceIds")
   }

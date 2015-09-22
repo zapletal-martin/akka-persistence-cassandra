@@ -1,20 +1,39 @@
 Cassandra Plugins for Akka Persistence
 ======================================
 
+[![Join the chat at https://gitter.im/krasserm/akka-persistence-cassandra](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/krasserm/akka-persistence-cassandra?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 Replicated [Akka Persistence](http://doc.akka.io/docs/akka/2.3.8/scala/persistence.html) journal and snapshot store backed by [Apache Cassandra](http://cassandra.apache.org/).
 
 [![Build Status](https://travis-ci.org/krasserm/akka-persistence-cassandra.svg?branch=master)](https://travis-ci.org/krasserm/akka-persistence-cassandra)
 
-Dependency
-----------
+Dependencies
+------------
 
-To include the Cassandra plugins into your `sbt` project, add the following lines to your `build.sbt` file:
+### Latest release
+
+To include the latest release of the Cassandra plugins into your `sbt` project, add the following lines to your `build.sbt` file:
 
     resolvers += "krasserm at bintray" at "http://dl.bintray.com/krasserm/maven"
 
     libraryDependencies += "com.github.krasserm" %% "akka-persistence-cassandra" % "0.4-SNAPSHOT"
 
 This version of `akka-persistence-cassandra` depends on Akka Akka 2.4-RC1 and is cross-built against Scala 2.10.4 and 2.11.6. It is compatible with Cassandra 2.1.0 or higher. Versions of the Cassandra plugins that are compatible with Cassandra 1.2.x are maintained on the [cassandra-1.2](https://github.com/krasserm/akka-persistence-cassandra/tree/cassandra-1.2) branch.
+   
+Migrating from 0.3 (Akka 2.3)
+-----------------------------
+
+Schema and property changes mean that you can't currently upgrade from 0.3 to 0.4 SNAPSHOT and use existing data. This will be addressed in [Issue 64](https://github.com/krasserm/akka-persistence-cassandra/issues/64).
+
+### Development snapshot
+
+To include a current development snapshot of the Cassandra plugins into your `sbt` project, add the following lines to your `build.sbt` file:
+
+    resolvers += "OJO Snapshots" at "https://oss.jfrog.org/oss-snapshot-local" 
+
+    libraryDependencies += "com.github.krasserm" %% "akka-persistence-cassandra" % "0.4-SNAPSHOT"
+
+This version of `akka-persistence-cassandra` depends on Akka 2.4-RC2 and Scala 2.11.6. It is compatible with Cassandra 2.1.0 or higher.
    
 Migrating from 0.3 (Akka 2.3)
 -----------------------------
@@ -49,7 +68,8 @@ This will run the journal with its default settings. The default settings can be
 - `cassandra-journal.replication-factor`. Replication factor to use when a keyspace is created by the plugin. Default value is `1`.
 - `cassandra-journal.data-center-replication-factors`. Replication factor list for data centers, e.g. ["dc1:3", "dc2:2"]. Is only used when replication-strategy is NetworkTopologyStrategy.
 - `cassandra-journal."max-message-batch-size"`. Maximum number of messages that will be batched when using `persistAsync`. Also used as the max batch size for deletes.
-- `cassandra-journal.target-partition-size`. Target number of messages per cassandra partition. Default value is 5000000. Will only go above the target if you use persistAll and persistAllAsync **Do not change this setting after table creation** (not checked yet).
+- `cassandra-journal.delete-retries`. Deletes are achieved using a metadata entry and then the actual messages are deleted asynchronously. Number of retries before giving up. Default value is 3. 
+- `cassandra-journal.target-partition-size`. Target number of messages per cassandra partition. Default value is 500000. Will only go above the target if you use persistAll and persistAllAsync **Do not change this setting after table creation** (not checked yet).
 - `cassandra-journal.max-result-size`. Maximum number of entries returned per query. Queries are executed recursively, if needed, to achieve recovery goals. Default value is 50001.
 - `cassandra-journal.write-consistency`. Write consistency level. Default value is `QUORUM`.
 - `cassandra-journal.read-consistency`. Read consistency level. Default value is `QUORUM`.

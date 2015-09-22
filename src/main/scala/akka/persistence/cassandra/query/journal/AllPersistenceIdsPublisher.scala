@@ -7,7 +7,7 @@ import akka.actor.Props
 import akka.pattern.pipe
 
 private[journal] object AllPersistenceIdsPublisher {
-  def props(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String): Props =
+  def props(refreshInterval: Option[FiniteDuration], maxBufSize: Int): Props =
     Props(new AllPersistenceIdsPublisher(refreshInterval, maxBufSize))
 
   case object Update

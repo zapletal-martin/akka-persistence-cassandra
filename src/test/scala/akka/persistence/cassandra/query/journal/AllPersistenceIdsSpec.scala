@@ -33,7 +33,7 @@ import akka.persistence.query.AllPersistenceIds
 object AllPersistenceIdsSpec {
   val config = """
     akka.loglevel = INFO
-    akka.persistence.journal.plugin = "cassandra-query-journal"
+    akka.persistence.journal.plugin = "cassandra-journal"
     akka.test.single-expect-default = 10s
                """
 }

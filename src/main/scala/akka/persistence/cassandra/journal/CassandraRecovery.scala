@@ -21,13 +21,11 @@ trait CassandraRecovery extends ActorLogging {
   }
 
   def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = Future {
-      readHighestSequenceNr(persistenceId, fromSequenceNr)
+    readHighestSequenceNr(persistenceId, fromSequenceNr)
   }
 
   def readHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Long = {
-    // see https://github.com/akka/akka/issues/18296
-    val default = math.max(0, fromSequenceNr - 1)
-    new MessageIterator(persistenceId, math.max(1L, fromSequenceNr), Long.MaxValue, Long.MaxValue).foldLeft(default) { case (acc, msg) => msg.sequenceNr }
+    findHighestSequenceNr(persistenceId, math.max(fromSequenceNr, highestDeletedSequenceNumber(persistenceId)))
   }
 
   def readLowestSequenceNr(persistenceId: String, fromSequenceNr: Long): Long = {
@@ -47,7 +45,10 @@ trait CassandraRecovery extends ActorLogging {
 
     import PersistentRepr.Undefined
 
-    private val iter = new RowIterator(persistenceId, fromSequenceNr, toSequenceNr)
+    private val initialFromSequenceNr = math.max(highestDeletedSequenceNumber(persistenceId) + 1, fromSequenceNr)
+    log.debug("Starting message scan from {}", initialFromSequenceNr)
+
+    private val iter = new RowIterator(persistenceId, initialFromSequenceNr, toSequenceNr)
     private var mcnt = 0L
 
     private var c: PersistentRepr = null
@@ -82,6 +83,31 @@ trait CassandraRecovery extends ActorLogging {
     }
   }
 
+
+  private def findHighestSequenceNr(persistenceId: String, fromSequenceNr: Long) = {
+    @annotation.tailrec
+    def find(currentPnr: Long, currentSnr: Long): Long = {
+      // if every message has been deleted and thus no sequence_nr the driver gives us back 0 for "null" :(
+      val next = Option(session.execute(preparedSelectHighestSequenceNr.bind(persistenceId, currentPnr: JLong)).one())
+        .map(row => (row.getBool("used"), row.getLong("sequence_nr")))
+      next match {
+        // never been to this partition
+        case None => currentSnr
+        // don't currently explicitly set false
+        case Some((false, _)) => currentSnr
+        // everything deleted in this partition, move to the next
+        case Some((true, 0)) => find(currentPnr+1, currentSnr)
+        case Some((_, nextHighest)) => find(currentPnr+1, nextHighest)
+      }
+    }
+    find(partitionNr(fromSequenceNr), fromSequenceNr)
+  }
+
+  private def highestDeletedSequenceNumber(persistenceId: String): Long = {
+    Option(session.execute(preparedSelectDeletedTo.bind(persistenceId)).one())
+      .map(_.getLong("deleted_to")).getOrElse(0)
+  }
+
   /**
    * Iterates over rows, crossing partition boundaries.
    */
@@ -92,7 +118,6 @@ trait CassandraRecovery extends ActorLogging {
     var fromSnr = fromSequenceNr
     var toSnr = toSequenceNr
 
-    var rcnt = 0
     var iter = newIter()
 
     def newIter() = {
@@ -110,20 +135,13 @@ trait CassandraRecovery extends ActorLogging {
       if (iter.hasNext) {
         // more entries available in current resultset
         true
-      } else if (rcnt == 0 && !inUse) {
-        // empty partition and inUse not set, empty partitions are a result of deletions or large persistAll calls
+      } else if (!inUse) {
+        // partition has never been in use so stop
         false
-      } else if (rcnt < maxResultSize) {
+      } else {
         // all entries consumed, try next partition
         currentPnr += 1
         fromSnr = currentSnr
-        rcnt = 0
-        iter = newIter()
-        hasNext
-      } else {
-        // max result set size reached, continue with same partition moving the fromSnr forward
-        fromSnr = currentSnr
-        rcnt = 0
         iter = newIter()
         hasNext
       }
@@ -132,7 +150,6 @@ trait CassandraRecovery extends ActorLogging {
     def next(): Row = {
       val row = iter.next()
       currentSnr = row.getLong("sequence_nr")
-      rcnt += 1
       row
     }
 
