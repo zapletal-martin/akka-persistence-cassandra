@@ -8,7 +8,7 @@ import akka.pattern.pipe
 
 private[journal] object AllPersistenceIdsPublisher {
   def props(refreshInterval: Option[FiniteDuration], maxBufSize: Int, writeJournalPluginId: String): Props =
-    Props(new AllPersistenceIdsPublisher(refreshInterval, maxBufSize, writeJournalPluginId))
+    Props(new AllPersistenceIdsPublisher(refreshInterval, maxBufSize))
 
   case object Update
 }
@@ -18,32 +18,20 @@ private[journal] object AllPersistenceIdsPublisher {
 //TODO: Refresh interval
 //TODO: Implementation of diff only works because set idempotence property. Will have to handle for other queries.
 //TODO: Free the implementation of buffer from interface. E.g. we want it to be a set rather than vector sometimes.
-private[journal] class AllPersistenceIdsPublisher(refreshInterval: Option[FiniteDuration], maxBufSize: Int, override val writeJournalPluginId: String)
-  extends QueryActorPublisher[String, Set[String]](refreshInterval, maxBufSize, writeJournalPluginId) {
+private[journal] class AllPersistenceIdsPublisher(refreshInterval: Option[FiniteDuration], maxBufSize: Int)
+  extends QueryActorPublisherClean[String, Int](refreshInterval, maxBufSize) {
 
-  /*override protected def update(params: String): Unit = {
+  override protected def query(state: Int): Future[Vector[String]] = {
     implicit val ec = context.dispatcher
-    curentAllPersistenceIds().map(_.toVector).map(BufferUpdate(_)).pipeTo(self)
+
+    curentAllPersistenceIds(state, state + 50).map(_.toVector)
   }
 
-  override def updateBuf(buf: Vector[String], newBuf: Vector[String]): Vector[String] = {
-    val difference = newBuf.diff(buf)
-    buf ++= newIds
-  }*/
-  override protected def query(state: Set[String]): Future[Vector[String]] = {
-    implicit val ec = context.dispatcher
-    curentAllPersistenceIds().map(_.toVector)
-  }
-
-  override protected def initialState: Set[String] = Set.empty[String]
+  override protected def initialState: Int = 0
 
   override def updateBuf(
-    buf: Vector[String],
-    newBuf: Vector[String],
-    state: Set[String]): (Vector[String], Set[String]) = {
-
-    //TODO: FIX
-    val difference = newBuf.toSet.diff(state)
-    (buf ++ difference, state ++ difference)
-  }
+      buf: Vector[String],
+      newBuf: Vector[String],
+      state: Int): (Vector[String], Int) =
+    (buf ++ newBuf, state + 50)
 }

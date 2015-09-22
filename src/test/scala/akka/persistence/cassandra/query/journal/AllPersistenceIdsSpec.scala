@@ -33,12 +33,10 @@ import akka.persistence.query.AllPersistenceIds
 object AllPersistenceIdsSpec {
   val config = """
     akka.loglevel = INFO
-    akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
-    akka.persistence.journal.leveldb.dir = "target/journal-AllPersistenceIdsSpec"
+    akka.persistence.journal.plugin = "cassandra-query-journal"
     akka.test.single-expect-default = 10s
                """
 }
-
 
 class AllPersistenceIdsSpec
   extends TestKit(ActorSystem("AllPersistenceIdsSpec", ConfigFactory.parseString(AllPersistenceIdsSpec.config)))
@@ -50,7 +48,7 @@ class AllPersistenceIdsSpec
   val secondSystem = ActorSystem("Second", ConfigFactory.parseString(AllPersistenceIdsSpec.config))
   implicit val mat = ActorMaterializer()(secondSystem)
 
-  val queries = PersistenceQuery(secondSystem).readJournalFor(LeveldbReadJournal.Identifier)
+  val queries = PersistenceQuery(secondSystem).readJournalFor(CassandraReadJournal.Identifier)
 
   "Leveldb query AllPersistenceIds" must {
     "find existing persistenceIds" in {

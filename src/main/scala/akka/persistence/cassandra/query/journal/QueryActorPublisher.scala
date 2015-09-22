@@ -13,7 +13,7 @@ object QueryActorPublisher {
   case object DeliverRequest
 }
 
-abstract class QueryActorPublisher[MessageType, State](refreshInterval: Option[FiniteDuration], maxBufSize: Int, override val writeJournalPluginId: String)
+abstract class QueryActorPublisher[MessageType, State](refreshInterval: Option[FiniteDuration], maxBufSize: Int)
   extends ActorPublisher[MessageType]
   with DeliveryBuffer[MessageType]
   with BufferOperations[MessageType, State]
