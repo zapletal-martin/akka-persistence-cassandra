@@ -2,23 +2,30 @@ package akka.persistence.cassandra.journal
 
 import java.lang.{ Long => JLong }
 import java.nio.ByteBuffer
-
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import scala.collection.immutable.Seq
 import scala.concurrent._
 import scala.math.min
-import scala.util.{ Failure, Success, Try }
-
 import akka.persistence._
 import akka.persistence.cassandra._
 import akka.persistence.journal.AsyncWriteJournal
+import akka.persistence.journal.Tagged
 import akka.serialization.SerializationExtension
 import com.datastax.driver.core._
 import com.datastax.driver.core.policies.{ LoggingRetryPolicy, RetryPolicy }
 import com.datastax.driver.core.policies.RetryPolicy.RetryDecision
 import com.datastax.driver.core.utils.Bytes
+import com.datastax.driver.core.utils.UUIDs
 import com.typesafe.config.Config
+import scala.util.Try
+import scala.util.Success
+import scala.util.Failure
 
 class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraRecovery with CassandraConfigChecker with CassandraStatements {
+  import CassandraJournal._
 
   val config = new CassandraJournalConfig(cfg)
   val serialization = SerializationExtension(context.system)
@@ -37,10 +44,12 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
   session.execute(createTable)
   session.execute(createMetatdataTable)
   session.execute(createConfigTable)
+  session.execute(createEventsByTagMaterializedView(1))
 
   val persistentConfig: Map[String, String] = initializePersistentConfig
 
   val preparedWriteMessage = session.prepare(writeMessage)
+  val preparedWriteMessageWithTag1 = session.prepare(writeMessageWithTag(1))
   val preparedDeletePermanent = session.prepare(deleteMessage)
   val preparedSelectMessages = session.prepare(selectMessages).setConsistencyLevel(readConsistency)
   val preparedCheckInUse = session.prepare(selectInUse).setConsistencyLevel(readConsistency)
@@ -59,7 +68,15 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
     val serialized = messages.map(aw => Try {
       SerializedAtomicWrite(
         aw.payload.head.persistenceId,
-        aw.payload.map(pr => Serialized(pr.sequenceNr, persistentToByteBuffer(pr))))
+        aw.payload.map { pr =>
+          val (pr2, tags) = pr.payload match {
+            case Tagged(payload, tags) ⇒
+              (pr.withPayload(payload), tags)
+            case _ ⇒ (pr, Set.empty[String])
+          }
+          //FIXME handle more than one tag
+          Serialized(pr.sequenceNr, persistentToByteBuffer(pr2), tags)
+        })
     })
     val result = serialized.map(a => a.map(_ => ()))
 
@@ -95,7 +112,17 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
     require(maxPnr - minPnr <= 1, "Do not support AtomicWrites that span 3 partitions. Keep AtomicWrites <= max partition size.")
 
     val writes: Seq[BoundStatement] = all.map { m =>
-      preparedWriteMessage.bind(persistenceId, maxPnr: JLong, m.sequenceNr: JLong, m.serialized)
+      // use same clock source as the UUID for the timeBucket
+      val nowUuid = UUIDs.timeBased()
+      val now = UUIDs.unixTimestamp(nowUuid)
+      if (m.tags.isEmpty)
+        preparedWriteMessage.bind(persistenceId, maxPnr: JLong, m.sequenceNr: JLong, nowUuid, timeBucket(now),
+          m.serialized)
+      else {
+        val tag1: String = m.tags.head
+        preparedWriteMessageWithTag1.bind(persistenceId, maxPnr: JLong, m.sequenceNr: JLong, nowUuid, timeBucket(now),
+          tag1, m.serialized)
+      }
     }
     // in case we skip an entire partition we want to make sure the empty partition has in in-use flag so scans
     // keep going when they encounter it
@@ -175,8 +202,18 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
   }
 
   private case class SerializedAtomicWrite(persistenceId: String, payload: Seq[Serialized])
-  private case class Serialized(sequenceNr: Long, serialized: ByteBuffer)
+  private case class Serialized(sequenceNr: Long, serialized: ByteBuffer, tags: Set[String])
   private case class PartitionInfo(partitionNr: Long, minSequenceNr: Long, maxSequenceNr: Long)
+}
+
+object CassandraJournal {
+
+  private[cassandra] val timeBucketFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
+
+  private[cassandra] def timeBucket(epochTimestamp: Long): String = {
+    val time = LocalDateTime.ofInstant(Instant.ofEpochMilli(epochTimestamp), ZoneOffset.UTC)
+    time.format(timeBucketFormatter)
+  }
 }
 
 class FixedRetryPolicy(number: Int) extends RetryPolicy {
