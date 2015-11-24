@@ -19,6 +19,7 @@ import java.time.LocalDateTime
 import java.util.UUID
 import java.time.ZoneOffset
 import java.time.LocalDate
+import com.datastax.driver.core.PreparedStatement
 
 object CassandraReadJournal {
   final val Identifier = "cassandra-query-journal"
@@ -47,9 +48,13 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
     }
   }
   session.execute(writeStatements.createTable)
-  session.execute(writeStatements.createEventsByTagMaterializedView(1))
-  val preparedSelectEventsByTag1 = session.prepare(queryStatements.selectEventsByTag(1))
-    .setConsistencyLevel(queryPluginConfig.readConsistency)
+  for (tagId <- 1 to writePluginConfig.maxTagId)
+    session.execute(writeStatements.createEventsByTagMaterializedView(tagId))
+  val preparedSelectEventsByTag: Vector[PreparedStatement] =
+    (1 to writePluginConfig.maxTagId).map { tagId =>
+      session.prepare(queryStatements.selectEventsByTag(tagId))
+        .setConsistencyLevel(queryPluginConfig.readConsistency)
+    }.toVector
 
   private val firstOffset: UUID = {
     val timestamp = LocalDate.parse(queryPluginConfig.firstTimeBucket, CassandraJournal.timeBucketFormatter)
@@ -60,17 +65,20 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   def offsetUuid(timestamp: Long): UUID =
     if (timestamp == 0L) firstOffset else UUIDs.startOf(timestamp)
 
+  private def selectStatement(tag: String): PreparedStatement =
+    preparedSelectEventsByTag(writePluginConfig.tags(tag) - 1)
+
   override def eventsByTag(tag: String, offset: Long): Source[EventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
-      refreshInterval, maxBufferSize, session, preparedSelectEventsByTag1)).mapMaterializedValue(_ ⇒ ())
+      refreshInterval, maxBufferSize, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("eventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
   }
 
   override def currentEventsByTag(tag: String, offset: Long = 0L): Source[EventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
-      None, maxBufferSize, session, preparedSelectEventsByTag1)).mapMaterializedValue(_ ⇒ ())
+      None, maxBufferSize, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("currentEventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
   }
 

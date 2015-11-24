@@ -48,10 +48,18 @@ object EventsByTagSpec {
       #target-partition-size = 5
       port = ${CassandraLauncher.randomPort}
       event-adapters {
-        color-tagger  = akka.persistence.cassandra.query.ColorTagger
+        color-tagger  = akka.persistence.cassandra.query.ColorFruitTagger
       }
       event-adapter-bindings = {
         "java.lang.String" = color-tagger
+      }
+      tags {
+        green = 1
+        black = 1
+        blue = 1
+        pink = 1
+        apple = 2
+        T1 = 1
       }
     }
     cassandra-query-journal {
@@ -91,11 +99,14 @@ object EventsByTagSpec {
 
 }
 
-class ColorTagger extends WriteEventAdapter {
+class ColorFruitTagger extends WriteEventAdapter {
   val colors = Set("green", "black", "blue")
+  val fruits = Set("apple", "banana")
   override def toJournal(event: Any): Any = event match {
     case s: String ⇒
-      var tags = colors.foldLeft(Set.empty[String])((acc, c) ⇒ if (s.contains(c)) acc + c else acc)
+      val colorTags = colors.foldLeft(Set.empty[String])((acc, c) ⇒ if (s.contains(c)) acc + c else acc)
+      val fruitTags = fruits.foldLeft(Set.empty[String])((acc, c) ⇒ if (s.contains(c)) acc + c else acc)
+      val tags = colorTags union fruitTags
       if (tags.isEmpty) event
       else Tagged(event, tags)
     case _ ⇒ event
@@ -122,19 +133,31 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
     cluster.connect()
   }
 
-  lazy val preparedWriteMessageWithTag1 = {
+  lazy val preparedWriteMessage = {
     val writeStatements: CassandraStatements = new CassandraStatements {
       def config: CassandraJournalConfig = writePluginConfig
     }
-    session.prepare(writeStatements.writeMessageWithTag(1))
+    session.prepare(writeStatements.writeMessage)
   }
 
-  def writeTestEvent(time: LocalDateTime, persistent: PersistentRepr, tag: String): Unit = {
+  def writeTestEvent(time: LocalDateTime, persistent: PersistentRepr, tags: Set[String]): Unit = {
     val serialized = ByteBuffer.wrap(serialization.serialize(persistent).get)
     val timestamp = time.toInstant(ZoneOffset.UTC).toEpochMilli
-    val stmt = preparedWriteMessageWithTag1.bind(persistent.persistenceId, 1: JLong, persistent.sequenceNr: JLong,
-      uuid(timestamp), CassandraJournal.timeBucket(timestamp), "T1", serialized)
-    session.execute(stmt)
+
+    val bs = preparedWriteMessage.bind()
+    bs.setString("persistence_id", persistent.persistenceId)
+    bs.setLong("partition_nr", 1L)
+    bs.setLong("sequence_nr", persistent.sequenceNr)
+    bs.setUUID("timestamp", uuid(timestamp))
+    bs.setString("timebucket", CassandraJournal.timeBucket(timestamp))
+    tags.foreach { tag =>
+      writePluginConfig.tags.get(tag) match {
+        case Some(tagId) => bs.setString("tag" + tagId, tag)
+        case None        => throw new IllegalArgumentException("Unknown tag [{}].")
+      }
+    }
+    bs.setBytes("message", serialized)
+    session.execute(bs)
   }
 
   def uuid(timestamp: Long): UUID = {
@@ -198,6 +221,19 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe2.request(5)
       probe2.expectNextPF { case e @ EventEnvelope(_, "b", 1L, "a black car") => e }
       probe2.expectComplete()
+
+      val appleSrc = queries.currentEventsByTag(tag = "apple", offset = 0L)
+      val probe3 = appleSrc.runWith(TestSink.probe[Any])
+      probe3.request(5)
+      probe3.expectNextPF { case e @ EventEnvelope(_, "a", 2L, "a green apple") => e }
+      probe3.expectComplete()
+    }
+
+    "complete when no events" in {
+      val src = queries.currentEventsByTag(tag = "pink", offset = 0L)
+      val probe = src.runWith(TestSink.probe[Any])
+      probe.request(2)
+      probe.expectComplete()
     }
 
     "not see new events after demand request" in {
@@ -240,16 +276,16 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       val t1 = today.minusDays(5).atStartOfDay.plusHours(13)
       val w1 = UUID.randomUUID().toString
       val pr1 = PersistentRepr("e1", 1L, "p1", "", writerUuid = w1)
-      writeTestEvent(t1, pr1, "T1")
+      writeTestEvent(t1, pr1, Set("T1"))
       val t2 = t1.plusHours(1)
       val pr2 = PersistentRepr("e2", 2L, "p1", "", writerUuid = w1)
-      writeTestEvent(t2, pr2, "T1")
+      writeTestEvent(t2, pr2, Set("T1"))
       val t3 = t1.plusDays(1)
       val pr3 = PersistentRepr("e3", 3L, "p1", "", writerUuid = w1)
-      writeTestEvent(t3, pr3, "T1")
+      writeTestEvent(t3, pr3, Set("T1"))
       val t4 = t1.plusDays(3)
       val pr4 = PersistentRepr("e4", 4L, "p1", "", writerUuid = w1)
-      writeTestEvent(t4, pr4, "T1")
+      writeTestEvent(t4, pr4, Set("T1"))
 
       val src = queries.currentEventsByTag(tag = "T1", offset = 0L)
       val probe = src.runWith(TestSink.probe[Any])
@@ -306,10 +342,10 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       val t1 = today.minusDays(5).atStartOfDay.plusHours(13)
       val w1 = UUID.randomUUID().toString
       val pr1 = PersistentRepr("e1", 1L, "p1", "", writerUuid = w1)
-      writeTestEvent(t1, pr1, "T1")
+      writeTestEvent(t1, pr1, Set("T1"))
       val t2 = t1.plusHours(1)
       val pr2 = PersistentRepr("e2", 2L, "p1", "", writerUuid = w1)
-      writeTestEvent(t2, pr2, "T1")
+      writeTestEvent(t2, pr2, Set("T1"))
 
       val src = queries.eventsByTag(tag = "T1", offset = 0L)
       val probe = src.runWith(TestSink.probe[Any])
@@ -319,10 +355,10 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
 
       val t3 = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5)
       val pr3 = PersistentRepr("e3", 3L, "p1", "", writerUuid = w1)
-      writeTestEvent(t3, pr3, "T1")
+      writeTestEvent(t3, pr3, Set("T1"))
       val t4 = LocalDateTime.now(ZoneOffset.UTC)
       val pr4 = PersistentRepr("e4", 4L, "p1", "", writerUuid = w1)
-      writeTestEvent(t4, pr4, "T1")
+      writeTestEvent(t4, pr4, Set("T1"))
 
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 3L, "e3") => e }
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 4L, "e4") => e }

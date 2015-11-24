@@ -23,6 +23,8 @@ trait CassandraStatements {
         timebucket text,
         message blob,
         tag1 text,
+        tag2 text,
+        tag3 text,
         PRIMARY KEY ((persistence_id, partition_nr), sequence_nr, timestamp, timebucket))
         WITH gc_grace_seconds =${config.gc_grace_seconds}
         AND compaction = ${config.tableCompactionStrategy.asCQL}
@@ -46,13 +48,8 @@ trait CassandraStatements {
       """
 
   def writeMessage = s"""
-      INSERT INTO ${tableName} (persistence_id, partition_nr, sequence_nr, timestamp, timebucket, message, used)
-      VALUES (?, ?, ?, ?, ?, ?, true)
-    """
-
-  def writeMessageWithTag(tagId: Int) = s"""
-      INSERT INTO ${tableName} (persistence_id, partition_nr, sequence_nr, timestamp, timebucket, tag$tagId, message, used)
-      VALUES (?, ?, ?, ?, ?, ?, ?, true)
+      INSERT INTO ${tableName} (persistence_id, partition_nr, sequence_nr, timestamp, timebucket, tag1, tag2, tag3, message, used)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true)
     """
 
   def deleteMessage = s"""

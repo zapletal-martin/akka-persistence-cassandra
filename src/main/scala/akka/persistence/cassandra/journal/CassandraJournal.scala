@@ -44,12 +44,12 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
   session.execute(createTable)
   session.execute(createMetatdataTable)
   session.execute(createConfigTable)
-  session.execute(createEventsByTagMaterializedView(1))
+  for (tagId <- 1 to maxTagId)
+    session.execute(createEventsByTagMaterializedView(tagId))
 
   val persistentConfig: Map[String, String] = initializePersistentConfig
 
   val preparedWriteMessage = session.prepare(writeMessage)
-  val preparedWriteMessageWithTag1 = session.prepare(writeMessageWithTag(1))
   val preparedDeletePermanent = session.prepare(deleteMessage)
   val preparedSelectMessages = session.prepare(selectMessages).setConsistencyLevel(readConsistency)
   val preparedCheckInUse = session.prepare(selectInUse).setConsistencyLevel(readConsistency)
@@ -74,7 +74,6 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
               (pr.withPayload(payload), tags)
             case _ ⇒ (pr, Set.empty[String])
           }
-          //FIXME handle more than one tag
           Serialized(pr.sequenceNr, persistentToByteBuffer(pr2), tags)
         })
     })
@@ -115,14 +114,20 @@ class CassandraJournal(cfg: Config) extends AsyncWriteJournal with CassandraReco
       // use same clock source as the UUID for the timeBucket
       val nowUuid = UUIDs.timeBased()
       val now = UUIDs.unixTimestamp(nowUuid)
-      if (m.tags.isEmpty)
-        preparedWriteMessage.bind(persistenceId, maxPnr: JLong, m.sequenceNr: JLong, nowUuid, timeBucket(now),
-          m.serialized)
-      else {
-        val tag1: String = m.tags.head
-        preparedWriteMessageWithTag1.bind(persistenceId, maxPnr: JLong, m.sequenceNr: JLong, nowUuid, timeBucket(now),
-          tag1, m.serialized)
+      val bs = preparedWriteMessage.bind()
+      bs.setString("persistence_id", persistenceId)
+      bs.setLong("partition_nr", maxPnr)
+      bs.setLong("sequence_nr", m.sequenceNr)
+      bs.setUUID("timestamp", nowUuid)
+      bs.setString("timebucket", timeBucket(now))
+      m.tags.foreach { tag =>
+        tags.get(tag) match {
+          case Some(tagId) => bs.setString("tag" + tagId, tag)
+          case None =>
+            log.warning("Unknown tag [{}]. Define known tags in cassandra-journal.tags configuration", tag)
+        }
       }
+      bs.setBytes("message", m.serialized)
     }
     // in case we skip an entire partition we want to make sure the empty partition has in in-use flag so scans
     // keep going when they encounter it

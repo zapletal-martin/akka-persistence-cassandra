@@ -119,7 +119,7 @@ private[query] abstract class AbstractEventsByTagPublisher(
 
   def replay(): Unit = {
     val limit = maxBufSize - buf.size
-    log.debug("request replay for tag [{}] from [{}] limit [{}]", tag, currOffset, limit)
+    log.debug("request replay for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
     context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, limit, self, session, preparedSelect))
     context.become(replaying(limit))
   }
