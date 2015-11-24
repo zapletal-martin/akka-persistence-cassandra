@@ -33,7 +33,6 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
 
   import context.dispatcher
   import akka.persistence.cassandra.listenableFutureToFuture
-  import akka.persistence.cassandra.query.UUIDComparator.comparator.compare
   import EventsByTagFetcher._
   import EventsByTagPublisher._
 
@@ -84,8 +83,6 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
         val seqNr = row.getLong("sequence_nr")
         val m = persistentFromByteBuffer(row.getBytes("message"))
         val offs = row.getUUID("timestamp")
-        if (compare(offs, highestOffset) <= 0)
-          throw new IllegalStateException(s"Invalid order for [$pid, $seqNr], expected offset $offs > $highestOffset")
         highestOffset = offs
         count += 1
         val eventEnvelope = TaggedEventEnvelope(

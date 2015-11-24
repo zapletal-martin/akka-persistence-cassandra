@@ -64,6 +64,7 @@ object EventsByTagSpec {
     }
     cassandra-query-journal {
       refresh-interval = 1s
+      max-buffer-size = 50
       first-time-bucket = ${today.minusDays(5).format(CassandraJournal.timeBucketFormatter)}
     }
     """)
@@ -319,6 +320,7 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe.expectNoMsg(100.millis)
       probe.request(10)
       probe.expectNextPF { case e @ EventEnvelope(_, "d", 2L, "a black night") => e }
+      probe.cancel()
     }
 
     "find events from offset" in {
@@ -336,6 +338,7 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe2.expectNextPF { case e @ EventEnvelope(_, "b", 2L, "a green leaf") => e }
       probe2.expectNextPF { case e @ EventEnvelope(_, "c", 1L, "a green cucumber") => e }
       probe2.expectNoMsg(100.millis)
+      probe2.cancel()
     }
 
     "find new events that spans several time buckets" in {
@@ -362,6 +365,41 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
 
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 3L, "e3") => e }
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 4L, "e4") => e }
+      probe.cancel()
+    }
+
+    "stream many events" in {
+      val e = system.actorOf(TestActor.props("e"))
+
+      val src = queries.eventsByTag(tag = "green", offset = 0L)
+      val probe = src.runWith(TestSink.probe[Any])
+      probe.request(4)
+      probe.expectNextPF { case e @ EventEnvelope(_, "a", 2L, "a green apple") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "a", 3L, "a green banana") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "b", 2L, "a green leaf") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "c", 1L, "a green cucumber") => e }
+
+      for (n <- 1 to 100)
+        e ! s"green-$n"
+
+      probe.request(200)
+      for (n <- 1 to 100) {
+        val Expected = s"green-$n"
+        probe.expectNextPF { case e @ EventEnvelope(_, "e", _, Expected) => e }
+      }
+      probe.expectNoMsg(100.millis)
+
+      for (n <- 101 to 200)
+        e ! s"green-$n"
+
+      for (n <- 101 to 200) {
+        val Expected = s"green-$n"
+        probe.expectNextPF { case e @ EventEnvelope(_, "e", _, Expected) => e }
+      }
+      probe.expectNoMsg(100.millis)
+
+      probe.request(10)
+      probe.expectNoMsg(100.millis)
     }
 
   }

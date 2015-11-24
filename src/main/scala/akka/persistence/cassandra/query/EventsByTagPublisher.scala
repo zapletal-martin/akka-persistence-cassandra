@@ -119,7 +119,7 @@ private[query] abstract class AbstractEventsByTagPublisher(
 
   def replay(): Unit = {
     val limit = maxBufSize - buf.size
-    log.debug("request replay for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
+    log.debug("query for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
     context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, limit, self, session, preparedSelect))
     context.become(replaying(limit))
   }
@@ -136,11 +136,11 @@ private[query] abstract class AbstractEventsByTagPublisher(
       deliverBuf()
 
     case ReplayDone(count) ⇒
-      log.debug("replay completed for tag [{}], timBucket [{}], count [{}]", tag, currTimeBucket, count)
+      log.debug("query chunk done for tag [{}], timBucket [{}], count [{}]", tag, currTimeBucket, count)
       receiveReplayDone(count)
 
     case ReplayFailed(cause) ⇒
-      log.debug("replay failed for tag [{}], due to [{}]", tag, cause.getMessage)
+      log.debug("query failed for tag [{}], due to [{}]", tag, cause.getMessage)
       deliverBuf()
       onErrorThenStop(cause)
 
@@ -185,8 +185,10 @@ private[query] class LiveEventsByTagPublisher(
     deliverBuf()
 
     // FIXME we might need to stay on previous bucket for a while when midnight?
-    if (count == 0 && isTimeBucketBeforeToday())
+    if (count == 0 && isTimeBucketBeforeToday()) {
       nextTimeBucket()
+      self ! Continue
+    }
 
     context.become(idle)
   }
