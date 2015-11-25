@@ -10,7 +10,8 @@ private[query] trait CassandraReadStatements {
       SELECT * FROM $eventsByTagViewName$tagId WHERE
         tag$tagId = ? AND
         timebucket = ? AND
-        timestamp > ?
+        timestamp > ? AND
+        timestamp < ?
         ORDER BY timestamp ASC
         LIMIT ?
     """

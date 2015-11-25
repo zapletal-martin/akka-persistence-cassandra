@@ -71,14 +71,14 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   override def eventsByTag(tag: String, offset: Long): Source[EventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
-      refreshInterval, maxBufferSize, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
+      Some(refreshInterval), queryPluginConfig, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("eventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
   }
 
   override def currentEventsByTag(tag: String, offset: Long = 0L): Source[EventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
-      None, maxBufferSize, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
+      None, queryPluginConfig, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("currentEventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
   }
 

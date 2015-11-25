@@ -6,10 +6,12 @@ import com.datastax.driver.core.ConsistencyLevel
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 
 class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJournalConfig) {
-  val refreshInterval: Option[FiniteDuration] = Some(config.getDuration("refresh-interval", MILLISECONDS).millis)
+  val refreshInterval: FiniteDuration = config.getDuration("refresh-interval", MILLISECONDS).millis
   val maxBufferSize: Int = config.getInt("max-buffer-size")
   val readConsistency: ConsistencyLevel = ConsistencyLevel.valueOf(config.getString("read-consistency"))
   val firstTimeBucket: String = config.getString("first-time-bucket")
+  val eventualConsistencyDelay: FiniteDuration =
+    config.getDuration("eventual-consistency-delay", MILLISECONDS).millis
 
   val eventsByTagView: String = writePluginConfig.eventsByTagView
   val keyspace: String = writePluginConfig.keyspace

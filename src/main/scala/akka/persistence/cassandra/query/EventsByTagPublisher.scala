@@ -3,9 +3,7 @@ package akka.persistence.cassandra.query
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
-
 import scala.concurrent.duration._
-
 import akka.actor.ActorLogging
 import akka.actor.DeadLetterSuppression
 import akka.actor.NoSerializationVerificationNeeded
@@ -20,20 +18,22 @@ import akka.stream.actor.ActorPublisherMessage.Request
 import com.datastax.driver.core.PreparedStatement
 import com.datastax.driver.core.Session
 import com.datastax.driver.core.utils.UUIDs
+import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 /**
  * INTERNAL API
  */
 private[query] object EventsByTagPublisher {
 
-  def props(tag: String, fromOffset: UUID, refreshInterval: Option[FiniteDuration], maxBufSize: Int,
+  def props(tag: String, fromOffset: UUID, refreshInterval: Option[FiniteDuration], settings: CassandraReadJournalConfig,
             session: Session, preparedSelect: PreparedStatement): Props = {
     refreshInterval match {
       case Some(interval) ⇒
         Props(new LiveEventsByTagPublisher(tag, fromOffset, interval,
-          maxBufSize, session, preparedSelect))
+          settings, session, preparedSelect))
       case None ⇒
-        Props(new CurrentEventsByTagPublisher(tag, fromOffset, maxBufSize, session, preparedSelect))
+        Props(new CurrentEventsByTagPublisher(tag, fromOffset, settings, session, preparedSelect))
     }
   }
 
@@ -58,9 +58,12 @@ private[query] object EventsByTagPublisher {
  */
 private[query] abstract class AbstractEventsByTagPublisher(
   val tag: String, val fromOffset: UUID,
-  val maxBufSize: Int, val session: Session, val preparedSelect: PreparedStatement)
+  val settings: CassandraReadJournalConfig, val session: Session, val preparedSelect: PreparedStatement)
   extends ActorPublisher[EventEnvelope] with DeliveryBuffer[EventEnvelope] with ActorLogging {
   import EventsByTagPublisher._
+  import settings.maxBufferSize
+
+  val eventualConsistencyDelayMillis = settings.eventualConsistencyDelay.toMillis
 
   var currTimeBucket: String = CassandraJournal.timeBucket(UUIDs.unixTimestamp(fromOffset))
   var currOffset: UUID = fromOffset
@@ -70,18 +73,13 @@ private[query] abstract class AbstractEventsByTagPublisher(
     currTimeBucket = nextDay.format(CassandraJournal.timeBucketFormatter)
   }
 
-  def today: LocalDate = LocalDate.now(ZoneOffset.UTC)
+  def today(): LocalDate =
+    LocalDateTime.now(ZoneOffset.UTC).minus(eventualConsistencyDelayMillis, ChronoUnit.MILLIS).toLocalDate
 
   def bucketDate: LocalDate = LocalDate.parse(currTimeBucket, CassandraJournal.timeBucketFormatter)
 
   def isTimeBucketBeforeToday(): Boolean =
-    bucketDate.isBefore(today)
-
-  def isTimeBucketTodayOrLater(): Boolean = {
-    val tday = today
-    val bucket = bucketDate
-    bucket.isEqual(tday) || bucket.isAfter(tday)
-  }
+    bucketDate.isBefore(today())
 
   // exceptions from Fetcher
   override val supervisorStrategy = OneForOneStrategy() {
@@ -115,12 +113,13 @@ private[query] abstract class AbstractEventsByTagPublisher(
   def receiveIdleRequest(): Unit
 
   def timeForReplay: Boolean =
-    (buf.isEmpty || buf.size <= maxBufSize / 2)
+    (buf.isEmpty || buf.size <= maxBufferSize / 2)
 
   def replay(): Unit = {
-    val limit = maxBufSize - buf.size
+    val limit = maxBufferSize - buf.size
     log.debug("query for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
-    context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, limit, self, session, preparedSelect))
+    val toOffset = UUIDs.endOf(System.currentTimeMillis() - eventualConsistencyDelayMillis)
+    context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, toOffset, limit, self, session, preparedSelect))
     context.become(replaying(limit))
   }
 
@@ -161,14 +160,14 @@ private[query] abstract class AbstractEventsByTagPublisher(
  */
 private[query] class LiveEventsByTagPublisher(
   tag: String, fromOffset: UUID,
-  refreshInterval: FiniteDuration,
-  maxBufSize: Int, session: Session, preparedSelect: PreparedStatement)
+  refresh: FiniteDuration,
+  settings: CassandraReadJournalConfig, session: Session, preparedSelect: PreparedStatement)
   extends AbstractEventsByTagPublisher(
-    tag, fromOffset, maxBufSize, session, preparedSelect) {
+    tag, fromOffset, settings, session, preparedSelect) {
   import EventsByTagPublisher._
 
   val tickTask =
-    context.system.scheduler.schedule(refreshInterval, refreshInterval, self, Continue)(context.dispatcher)
+    context.system.scheduler.schedule(refresh, refresh, self, Continue)(context.dispatcher)
 
   override def postStop(): Unit =
     tickTask.cancel()
@@ -184,7 +183,6 @@ private[query] class LiveEventsByTagPublisher(
   override def receiveReplayDone(count: Int): Unit = {
     deliverBuf()
 
-    // FIXME we might need to stay on previous bucket for a while when midnight?
     if (count == 0 && isTimeBucketBeforeToday()) {
       nextTimeBucket()
       self ! Continue
@@ -196,15 +194,17 @@ private[query] class LiveEventsByTagPublisher(
 }
 
 private[query] class CurrentEventsByTagPublisher(
-  tag: String, fromOffset: UUID, maxBufSize: Int,
+  tag: String, fromOffset: UUID, settings: CassandraReadJournalConfig,
   session: Session, preparedSelect: PreparedStatement)
   extends AbstractEventsByTagPublisher(
-    tag, fromOffset, maxBufSize, session, preparedSelect) {
+    tag, fromOffset, settings, session, preparedSelect) {
   import EventsByTagPublisher._
+  import context.dispatcher
 
   var replayDone = false
 
-  override val today: LocalDate = LocalDate.now(ZoneOffset.UTC)
+  override val today: LocalDate = super.today()
+  val endTime = System.currentTimeMillis() + settings.eventualConsistencyDelay.toMillis
 
   override def receiveInitialRequest(): Unit =
     replay()
@@ -222,13 +222,18 @@ private[query] class CurrentEventsByTagPublisher(
   override def receiveReplayDone(count: Int): Unit = {
     deliverBuf()
 
-    if (count == 0 && isTimeBucketTodayOrLater()) {
-      replayDone = true
-      if (buf.isEmpty)
-        onCompleteThenStop()
-    } else if (count == 0) {
-      nextTimeBucket()
-      self ! Continue // more to fetch
+    if (count == 0) {
+      if (isTimeBucketBeforeToday()) {
+        nextTimeBucket()
+        self ! Continue // more to fetch
+      } else if (System.currentTimeMillis() > endTime) {
+        replayDone = true
+        if (buf.isEmpty)
+          onCompleteThenStop()
+      } else {
+        // in the eventual consistency delay zone
+        context.system.scheduler.scheduleOnce(settings.refreshInterval, self, Continue)
+      }
     } else {
       self ! Continue // more to fetch
     }

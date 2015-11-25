@@ -2,9 +2,7 @@ package akka.persistence.cassandra.query
 
 import java.nio.ByteBuffer
 import java.util.UUID
-
 import scala.concurrent.Future
-
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
@@ -16,23 +14,26 @@ import com.datastax.driver.core.PreparedStatement
 import com.datastax.driver.core.ResultSet
 import com.datastax.driver.core.Session
 import com.datastax.driver.core.utils.Bytes
+import akka.actor.ActorLogging
 
 private[query] object EventsByTagFetcher {
 
   private final case class InitResultSet(rs: ResultSet)
   private case object Fetched
 
-  def props(tag: String, timeBucket: String, fromOffset: UUID, limit: Int, replyTo: ActorRef,
+  def props(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int, replyTo: ActorRef,
             session: Session, preparedSelect: PreparedStatement): Props =
-    Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, limit, replyTo, session, preparedSelect))
+    Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, toOffset, limit, replyTo, session, preparedSelect))
 
 }
 
-private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOffset: UUID, limit: Int, replyTo: ActorRef,
-                                        session: Session, preparedSelect: PreparedStatement) extends Actor {
+private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int,
+                                        replyTo: ActorRef, session: Session, preparedSelect: PreparedStatement)
+  extends Actor with ActorLogging {
 
   import context.dispatcher
   import akka.persistence.cassandra.listenableFutureToFuture
+  import akka.persistence.cassandra.query.UUIDComparator.comparator.compare
   import EventsByTagFetcher._
   import EventsByTagPublisher._
 
@@ -46,7 +47,7 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
   var count = 0
 
   override def preStart(): Unit = {
-    val boundStmt = preparedSelect.bind(tag, timeBucket, fromOffset, limit: Integer)
+    val boundStmt = preparedSelect.bind(tag, timeBucket, fromOffset, toOffset, limit: Integer)
     // FIXME tune fetch size
     //            boundStmt.setFetchSize(2)
     val init: Future[ResultSet] = session.executeAsync(boundStmt)
@@ -83,6 +84,9 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
         val seqNr = row.getLong("sequence_nr")
         val m = persistentFromByteBuffer(row.getBytes("message"))
         val offs = row.getUUID("timestamp")
+        if (compare(offs, highestOffset) <= 0)
+          log.debug("Events were not ordered by timestamp. Consider increasing eventual-consistency-delay " +
+            "if the order is of importance.")
         highestOffset = offs
         count += 1
         val eventEnvelope = TaggedEventEnvelope(

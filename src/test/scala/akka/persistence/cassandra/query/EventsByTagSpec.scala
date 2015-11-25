@@ -60,12 +60,14 @@ object EventsByTagSpec {
         pink = 1
         apple = 2
         T1 = 1
+        T2 = 2
       }
     }
     cassandra-query-journal {
-      refresh-interval = 1s
+      refresh-interval = 500ms
       max-buffer-size = 50
       first-time-bucket = ${today.minusDays(5).format(CassandraJournal.timeBucketFormatter)}
+      eventual-consistency-delay = 2s
     }
     """)
 
@@ -365,6 +367,33 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
 
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 3L, "e3") => e }
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 4L, "e4") => e }
+      probe.cancel()
+    }
+
+    "sort events by timestamp" in {
+      val t1 = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(10)
+      val w1 = UUID.randomUUID().toString
+      val w2 = UUID.randomUUID().toString
+      val pr1 = PersistentRepr("p1-e1", 1L, "p1", "", writerUuid = w1)
+      writeTestEvent(t1, pr1, Set("T2"))
+      val t3 = LocalDateTime.now(ZoneOffset.UTC)
+      val pr3 = PersistentRepr("p1-e2", 2L, "p1", "", writerUuid = w1)
+      writeTestEvent(t3, pr3, Set("T2"))
+
+      val src = queries.eventsByTag(tag = "T2", offset = 0L)
+      val probe = src.runWith(TestSink.probe[Any])
+      probe.request(10)
+
+      // simulate async eventually consistent Materialized View update
+      // that cause p1-e2 to show up before p2-e1
+      Thread.sleep(500)
+      val t2 = t3.minus(1, ChronoUnit.MILLIS)
+      val pr2 = PersistentRepr("p2-e1", 1L, "p2", "", writerUuid = w2)
+      writeTestEvent(t2, pr2, Set("T2"))
+
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 1L, "p1-e1") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "p2", 1L, "p2-e1") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 2L, "p1-e2") => e }
       probe.cancel()
     }
 
