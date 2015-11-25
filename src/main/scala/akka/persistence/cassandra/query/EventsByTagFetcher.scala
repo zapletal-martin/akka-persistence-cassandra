@@ -22,13 +22,16 @@ private[query] object EventsByTagFetcher {
   private case object Fetched
 
   def props(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int, replyTo: ActorRef,
-            session: Session, preparedSelect: PreparedStatement): Props =
-    Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, toOffset, limit, replyTo, session, preparedSelect))
+            session: Session, preparedSelect: PreparedStatement, seqNumbers: SequenceNumbers): Props =
+    Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, toOffset, limit, replyTo, session, preparedSelect,
+      seqNumbers))
 
 }
 
-private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int,
-                                        replyTo: ActorRef, session: Session, preparedSelect: PreparedStatement)
+private[query] class EventsByTagFetcher(
+  tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int,
+  replyTo: ActorRef, session: Session, preparedSelect: PreparedStatement,
+  seqN: SequenceNumbers)
   extends Actor with ActorLogging {
 
   import context.dispatcher
@@ -45,6 +48,7 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
 
   var highestOffset: UUID = fromOffset
   var count = 0
+  var seqNumbers = seqN
 
   override def preStart(): Unit = {
     val boundStmt = preparedSelect.bind(tag, timeBucket, fromOffset, toOffset, limit: Integer)
@@ -73,37 +77,56 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
 
   def continue(resultSet: ResultSet): Unit = {
     if (resultSet.isExhausted()) {
-      replyTo ! ReplayDone(count)
+      replyTo ! ReplayDone(count, seqNumbers)
       context.stop(self)
     } else {
       var n = resultSet.getAvailableWithoutFetching
-      while (n > 0) {
+      var abort = false
+      while (n > 0 && !abort) {
         n -= 1
         val row = resultSet.one()
         val pid = row.getString("persistence_id")
         val seqNr = row.getLong("sequence_nr")
-        val m = persistentFromByteBuffer(row.getBytes("message"))
-        val offs = row.getUUID("timestamp")
-        if (compare(offs, highestOffset) <= 0)
-          log.debug("Events were not ordered by timestamp. Consider increasing eventual-consistency-delay " +
-            "if the order is of importance.")
-        highestOffset = offs
-        count += 1
-        val eventEnvelope = TaggedEventEnvelope(
-          offset = offs,
-          persistenceId = pid,
-          sequenceNr = row.getLong("sequence_nr"),
-          event = m.payload)
-        replyTo ! eventEnvelope
+
+        seqNumbers.isNext(pid, seqNr) match {
+          case SequenceNumbers.Yes | SequenceNumbers.PossiblyFirst =>
+            seqNumbers = seqNumbers.updated(pid, seqNr)
+            val m = persistentFromByteBuffer(row.getBytes("message"))
+            val offs = row.getUUID("timestamp")
+            if (compare(offs, highestOffset) <= 0)
+              log.debug("Events were not ordered by timestamp. Consider increasing eventual-consistency-delay " +
+                "if the order is of importance.")
+            highestOffset = offs
+            count += 1
+            val eventEnvelope = TaggedEventEnvelope(
+              offset = offs,
+              persistenceId = pid,
+              sequenceNr = row.getLong("sequence_nr"),
+              event = m.payload)
+            replyTo ! eventEnvelope
+
+          case SequenceNumbers.After =>
+            abort = true
+            replyTo ! ReplayAborted(seqNumbers, pid, seqNumbers.get(pid) + 1, seqNr)
+
+          case SequenceNumbers.Before =>
+            // duplicate, discard
+            log.debug(s"Discarding duplicate. Got sequence number [$seqNr] for [$pid], " +
+              s"but current sequence number is [${seqNumbers.get(pid)}]")
+        }
+
       }
-      val more: Future[ResultSet] = resultSet.fetchMoreResults()
-      more.map(_ => Fetched).pipeTo(self)
+
+      if (!abort) {
+        val more: Future[ResultSet] = resultSet.fetchMoreResults()
+        more.map(_ => Fetched).pipeTo(self)
+      }
     }
   }
 
   // FIXME remove
   def printAll(): Unit = {
-    val iter = session.execute(s"SELECT * FROM akka.eventsbytag1").iterator
+    val iter = session.execute(s"SELECT * FROM akka.eventsbytag3").iterator
     while (iter.hasNext()) {
       val row = iter.next()
       val pid = row.getString("persistence_id")
@@ -111,8 +134,20 @@ private[query] class EventsByTagFetcher(tag: String, timeBucket: String, fromOff
       val m = persistentFromByteBuffer(row.getBytes("message"))
       val offs = row.getUUID("timestamp")
       val buck = row.getString("timebucket")
-      println(s"# replay ALL $buck $pid $seqNr $offs (${offs.timestamp}) ${m.payload}  [${row.getString("tag1")}]") // FIXME
+      println(s"# replay ALL $buck $pid $seqNr $offs (${offs.timestamp}) ${m.payload}  [${row.getString("tag3")}]") // FIXME
     }
+
+    val iter2 = session.execute(s"SELECT * FROM akka.messages").iterator
+    while (iter2.hasNext()) {
+      val row = iter2.next()
+      val pid = row.getString("persistence_id")
+      val seqNr = row.getLong("sequence_nr")
+      val m = persistentFromByteBuffer(row.getBytes("message"))
+      val offs = row.getUUID("timestamp")
+      val buck = row.getString("timebucket")
+      println(s"# replay ALL MESSAGES $buck $pid $seqNr $offs (${offs.timestamp}) ${m.payload}  [${row.getString("tag3")}]") // FIXME
+    }
+
   }
 
 }

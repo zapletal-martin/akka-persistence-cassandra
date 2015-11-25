@@ -41,7 +41,7 @@ object EventsByTagSpec {
   val today = LocalDate.now(ZoneOffset.UTC)
 
   val config = ConfigFactory.parseString(s"""
-    akka.loglevel = DEBUG
+    akka.loglevel = DEBUG # FIXME change
     akka.test.single-expect-default = 10s
     akka.persistence.journal.plugin = "cassandra-journal"
     cassandra-journal {
@@ -61,6 +61,8 @@ object EventsByTagSpec {
         apple = 2
         T1 = 1
         T2 = 2
+        T3 = 3
+        T4 = 1
       }
     }
     cassandra-query-journal {
@@ -68,6 +70,7 @@ object EventsByTagSpec {
       max-buffer-size = 50
       first-time-bucket = ${today.minusDays(5).format(CassandraJournal.timeBucketFormatter)}
       eventual-consistency-delay = 2s
+      wrong-sequence-number-order-timeout = 3s
     }
     """)
 
@@ -395,6 +398,59 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe.expectNextPF { case e @ EventEnvelope(_, "p2", 1L, "p2-e1") => e }
       probe.expectNextPF { case e @ EventEnvelope(_, "p1", 2L, "p1-e2") => e }
       probe.cancel()
+    }
+
+    "detect missing sequence number and wait for it" in {
+      val t1 = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5)
+      val w1 = UUID.randomUUID().toString
+      val pr1 = PersistentRepr("e1", 1L, "p1", "", writerUuid = w1)
+      writeTestEvent(t1, pr1, Set("T3"))
+
+      val t2 = t1.plusSeconds(1)
+      val pr2 = PersistentRepr("e2", 2L, "p1", "", writerUuid = w1)
+      writeTestEvent(t2, pr2, Set("T3"))
+
+      val t4 = t1.plusSeconds(3)
+      val pr4 = PersistentRepr("e4", 4L, "p1", "", writerUuid = w1)
+      writeTestEvent(t4, pr4, Set("T3"))
+
+      val src = queries.eventsByTag(tag = "T3", offset = 0L)
+      val probe = src.runWith(TestSink.probe[Any])
+      probe.request(10)
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 1L, "e1") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 2L, "e2") => e }
+      probe.expectNoMsg(500.millis)
+
+      val t3 = t1.plusSeconds(2)
+      val pr3 = PersistentRepr("e3", 3L, "p1", "", writerUuid = w1)
+      writeTestEvent(t3, pr3, Set("T3"))
+
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 3L, "e3") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 4L, "e4") => e }
+      probe.cancel()
+    }
+
+    "detect missing sequence number and fail after timeout" in {
+      val t1 = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5)
+      val w1 = UUID.randomUUID().toString
+      val pr1 = PersistentRepr("e1", 1L, "p1", "", writerUuid = w1)
+      writeTestEvent(t1, pr1, Set("T4"))
+
+      val t2 = t1.plusSeconds(1)
+      val pr2 = PersistentRepr("e2", 2L, "p1", "", writerUuid = w1)
+      writeTestEvent(t2, pr2, Set("T4"))
+
+      val t4 = t1.plusSeconds(3)
+      val pr4 = PersistentRepr("e4", 4L, "p1", "", writerUuid = w1)
+      writeTestEvent(t4, pr4, Set("T4"))
+
+      val src = queries.eventsByTag(tag = "T4", offset = 0L)
+      val probe = src.runWith(TestSink.probe[Any])
+      probe.request(10)
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 1L, "e1") => e }
+      probe.expectNextPF { case e @ EventEnvelope(_, "p1", 2L, "e2") => e }
+      probe.expectNoMsg(1.seconds)
+      probe.expectError().getClass should be(classOf[IllegalStateException])
     }
 
     "stream many events" in {

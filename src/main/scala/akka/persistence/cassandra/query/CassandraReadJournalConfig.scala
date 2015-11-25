@@ -12,6 +12,8 @@ class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJou
   val firstTimeBucket: String = config.getString("first-time-bucket")
   val eventualConsistencyDelay: FiniteDuration =
     config.getDuration("eventual-consistency-delay", MILLISECONDS).millis
+  val wrongSequenceNumberOrderTimeout: FiniteDuration =
+    config.getDuration("wrong-sequence-number-order-timeout", MILLISECONDS).millis
 
   val eventsByTagView: String = writePluginConfig.eventsByTagView
   val keyspace: String = writePluginConfig.keyspace

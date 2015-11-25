@@ -46,7 +46,10 @@ private[query] object EventsByTagPublisher {
     event: Any)
     extends DeadLetterSuppression with NoSerializationVerificationNeeded
 
-  private[query] case class ReplayDone(count: Int)
+  private[query] case class ReplayDone(count: Int, seqNumbers: SequenceNumbers)
+    extends DeadLetterSuppression
+  private[query] case class ReplayAborted(
+    seqNumbers: SequenceNumbers, persistenceId: String, expectedSeqNr: Long, gotSeqNr: Long)
     extends DeadLetterSuppression
   private[query] final case class ReplayFailed(cause: Throwable)
     extends DeadLetterSuppression with NoSerializationVerificationNeeded
@@ -67,6 +70,8 @@ private[query] abstract class AbstractEventsByTagPublisher(
 
   var currTimeBucket: String = CassandraJournal.timeBucket(UUIDs.unixTimestamp(fromOffset))
   var currOffset: UUID = fromOffset
+  var seqNumbers = SequenceNumbers.empty
+  var abortDeadline: Option[Deadline] = None
 
   def nextTimeBucket(): Unit = {
     val nextDay = LocalDate.parse(currTimeBucket, CassandraJournal.timeBucketFormatter).plusDays(1)
@@ -119,13 +124,13 @@ private[query] abstract class AbstractEventsByTagPublisher(
     val limit = maxBufferSize - buf.size
     log.debug("query for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
     val toOffset = UUIDs.endOf(System.currentTimeMillis() - eventualConsistencyDelayMillis)
-    context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, toOffset, limit, self, session, preparedSelect))
+    context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, toOffset, limit, self,
+      session, preparedSelect, seqNumbers))
     context.become(replaying(limit))
   }
 
   def replaying(limit: Int): Receive = {
     case TaggedEventEnvelope(offs, pid, seqNr, evt) ⇒
-      // FIXME handle seqNr in wrong order, due to Materialized View async eventually consistency
       buf :+= EventEnvelope(
         offset = UUIDs.unixTimestamp(offs),
         persistenceId = pid,
@@ -134,9 +139,27 @@ private[query] abstract class AbstractEventsByTagPublisher(
       currOffset = offs
       deliverBuf()
 
-    case ReplayDone(count) ⇒
+    case ReplayDone(count, seqN) ⇒
       log.debug("query chunk done for tag [{}], timBucket [{}], count [{}]", tag, currTimeBucket, count)
+      seqNumbers = seqN
+      abortDeadline = None
       receiveReplayDone(count)
+
+    case ReplayAborted(seqN, pid, expectedSeqNr, gotSeqNr) ⇒
+      seqNumbers = seqN
+      def logMsg = s"query chunk aborted for tag [$tag], timBucket [$currTimeBucket], " +
+        s" expected sequence number [$expectedSeqNr] for [$pid], but got [$gotSeqNr]"
+      abortDeadline match {
+        case Some(deadline) if deadline.isOverdue =>
+          val m = logMsg
+          log.error(m)
+          onErrorThenStop(new IllegalStateException(m))
+        case _ =>
+          if (log.isDebugEnabled) log.debug(logMsg)
+          if (abortDeadline.isEmpty)
+            abortDeadline = Some(Deadline.now + settings.wrongSequenceNumberOrderTimeout)
+          receiveReplayAborted()
+      }
 
     case ReplayFailed(cause) ⇒
       log.debug("query failed for tag [{}], due to [{}]", tag, cause.getMessage)
@@ -153,6 +176,8 @@ private[query] abstract class AbstractEventsByTagPublisher(
   }
 
   def receiveReplayDone(count: Int): Unit
+
+  def receiveReplayAborted(): Unit
 }
 
 /**
@@ -172,13 +197,11 @@ private[query] class LiveEventsByTagPublisher(
   override def postStop(): Unit =
     tickTask.cancel()
 
-  override def receiveInitialRequest(): Unit = {
+  override def receiveInitialRequest(): Unit =
     replay()
-  }
 
-  override def receiveIdleRequest(): Unit = {
+  override def receiveIdleRequest(): Unit =
     deliverBuf()
-  }
 
   override def receiveReplayDone(count: Int): Unit = {
     deliverBuf()
@@ -190,6 +213,10 @@ private[query] class LiveEventsByTagPublisher(
 
     context.become(idle)
   }
+
+  // will retry by the scheduled Continue
+  override def receiveReplayAborted(): Unit =
+    context.become(idle)
 
 }
 
@@ -238,6 +265,11 @@ private[query] class CurrentEventsByTagPublisher(
       self ! Continue // more to fetch
     }
 
+    context.become(idle)
+  }
+
+  override def receiveReplayAborted(): Unit = {
+    context.system.scheduler.scheduleOnce(settings.refreshInterval, self, Continue)
     context.become(idle)
   }
 
