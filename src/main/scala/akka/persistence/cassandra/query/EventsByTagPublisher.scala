@@ -35,7 +35,7 @@ private[query] object EventsByTagPublisher {
     }
   }
 
-  private[query] case object Continue
+  private[query] case object Continue extends DeadLetterSuppression
 
   private[query] case class ReplayDone(count: Int, seqNumbers: SequenceNumbers)
     extends DeadLetterSuppression
@@ -164,15 +164,11 @@ private[query] abstract class AbstractEventsByTagPublisher(
   def receiveReplayAborted(): Unit
 }
 
-/**
- * INTERNAL API
- */
 private[query] class LiveEventsByTagPublisher(
   tag: String, fromOffset: UUID,
   refresh: FiniteDuration,
   settings: CassandraReadJournalConfig, session: Session, preparedSelect: PreparedStatement)
-  extends AbstractEventsByTagPublisher(
-    tag, fromOffset, settings, session, preparedSelect) {
+  extends AbstractEventsByTagPublisher(tag, fromOffset, settings, session, preparedSelect) {
   import EventsByTagPublisher._
 
   val tickTask =
@@ -207,12 +203,11 @@ private[query] class LiveEventsByTagPublisher(
 private[query] class CurrentEventsByTagPublisher(
   tag: String, fromOffset: UUID, settings: CassandraReadJournalConfig,
   session: Session, preparedSelect: PreparedStatement)
-  extends AbstractEventsByTagPublisher(
-    tag, fromOffset, settings, session, preparedSelect) {
+  extends AbstractEventsByTagPublisher(tag, fromOffset, settings, session, preparedSelect) {
   import EventsByTagPublisher._
   import context.dispatcher
 
-  var replayDone = false
+  var done = false
 
   override val today: LocalDate = super.today()
   val endTime = System.currentTimeMillis() + settings.eventualConsistencyDelay.toMillis
@@ -222,13 +217,13 @@ private[query] class CurrentEventsByTagPublisher(
 
   override def receiveIdleRequest(): Unit = {
     deliverBuf()
-    if (buf.isEmpty)
+    if (buf.isEmpty && done)
       onCompleteThenStop()
     else
       self ! Continue
   }
 
-  override def timeForReplay: Boolean = !replayDone && super.timeForReplay
+  override def timeForReplay: Boolean = !done && super.timeForReplay
 
   override def receiveReplayDone(count: Int): Unit = {
     deliverBuf()
@@ -238,7 +233,7 @@ private[query] class CurrentEventsByTagPublisher(
         nextTimeBucket()
         self ! Continue // more to fetch
       } else if (System.currentTimeMillis() > endTime) {
-        replayDone = true
+        done = true
         if (buf.isEmpty)
           onCompleteThenStop()
       } else {

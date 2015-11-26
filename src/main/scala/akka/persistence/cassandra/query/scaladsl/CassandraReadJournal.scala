@@ -4,7 +4,6 @@ import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
-
 import akka.actor.ExtendedActorSystem
 import akka.persistence.cassandra.journal.CassandraJournal
 import akka.persistence.cassandra.journal.CassandraJournalConfig
@@ -21,6 +20,8 @@ import akka.util.ByteString
 import com.datastax.driver.core.PreparedStatement
 import com.datastax.driver.core.utils.UUIDs
 import com.typesafe.config.Config
+import akka.persistence.cassandra.retry
+import com.datastax.driver.core.Session
 
 object CassandraReadJournal {
   /**
@@ -52,33 +53,47 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   with EventsByTagQuery
   with CurrentEventsByTagQuery {
 
-  // FIXME session should be lazy and creations should be done with retries
   private val writePluginConfig = new CassandraJournalConfig(system.settings.config.getConfig(config.getString("write-plugin")))
   private val queryPluginConfig = new CassandraReadJournalConfig(config, writePluginConfig)
-  private val cluster = writePluginConfig.clusterBuilder.build
-  private val session = cluster.connect()
-  private val writeStatements: CassandraStatements = new CassandraStatements {
-    def config: CassandraJournalConfig = writePluginConfig
-  }
-  private val queryStatements: CassandraReadStatements = new CassandraReadStatements {
-    override def config = queryPluginConfig
-  }
-  if (writePluginConfig.keyspaceAutoCreate) {
-    akka.persistence.cassandra.retry(writePluginConfig.keyspaceAutoCreateRetries) {
-      session.execute(writeStatements.createKeyspace)
+
+  private class CassandraSession {
+
+    val session: Session = connect()
+
+    private def connect(): Session = {
+      val cluster = writePluginConfig.clusterBuilder.build
+      retry(writePluginConfig.connectionRetries + 1, writePluginConfig.connectionRetryDelay.toMillis) {
+        cluster.connect()
+      }
     }
+
+    private val writeStatements: CassandraStatements = new CassandraStatements {
+      def config: CassandraJournalConfig = writePluginConfig
+    }
+    private val queryStatements: CassandraReadStatements = new CassandraReadStatements {
+      override def config = queryPluginConfig
+    }
+    if (writePluginConfig.keyspaceAutoCreate) {
+      akka.persistence.cassandra.retry(writePluginConfig.keyspaceAutoCreateRetries) {
+        session.execute(writeStatements.createKeyspace)
+      }
+    }
+    session.execute(writeStatements.createTable)
+    for (tagId <- 1 to writePluginConfig.maxTagId)
+      session.execute(writeStatements.createEventsByTagMaterializedView(tagId))
+
+    val preparedSelectEventsByTag: Vector[PreparedStatement] =
+      (1 to writePluginConfig.maxTagId).map { tagId =>
+        session.prepare(queryStatements.selectEventsByTag(tagId))
+          .setConsistencyLevel(queryPluginConfig.readConsistency)
+      }.toVector
+
   }
-  session.execute(writeStatements.createTable)
-  for (tagId <- 1 to writePluginConfig.maxTagId)
-    session.execute(writeStatements.createEventsByTagMaterializedView(tagId))
-  private val preparedSelectEventsByTag: Vector[PreparedStatement] =
-    (1 to writePluginConfig.maxTagId).map { tagId =>
-      session.prepare(queryStatements.selectEventsByTag(tagId))
-        .setConsistencyLevel(queryPluginConfig.readConsistency)
-    }.toVector
+
+  private lazy val cassandraSession: CassandraSession = new CassandraSession
 
   private def selectStatement(tag: String): PreparedStatement =
-    preparedSelectEventsByTag(writePluginConfig.tags(tag) - 1)
+    cassandraSession.preparedSelectEventsByTag(writePluginConfig.tags(tag) - 1)
 
   val firstOffset: UUID = {
     // FIXME perhaps we can do something smarter, such as caching the highest offset retrieved
@@ -164,7 +179,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   def eventsByTag(tag: String, offset: UUID): Source[UUIDEventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[UUIDEventEnvelope](EventsByTagPublisher.props(tag, offset,
-      Some(refreshInterval), queryPluginConfig, session, selectStatement(tag)))
+      Some(refreshInterval), queryPluginConfig, cassandraSession.session, selectStatement(tag)))
       .mapMaterializedValue(_ ⇒ ())
       .named("eventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
       .withAttributes(ActorAttributes.dispatcher(pluginDispatcher))
@@ -199,7 +214,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   def currentEventsByTag(tag: String, offset: UUID): Source[UUIDEventEnvelope, Unit] = {
     import queryPluginConfig._
     Source.actorPublisher[UUIDEventEnvelope](EventsByTagPublisher.props(tag, offset,
-      None, queryPluginConfig, session, selectStatement(tag)))
+      None, queryPluginConfig, cassandraSession.session, selectStatement(tag)))
       .mapMaterializedValue(_ ⇒ ())
       .named("currentEventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
       .withAttributes(ActorAttributes.dispatcher(pluginDispatcher))

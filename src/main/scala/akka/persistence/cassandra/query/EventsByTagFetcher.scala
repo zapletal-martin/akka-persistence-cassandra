@@ -15,11 +15,13 @@ import com.datastax.driver.core.ResultSet
 import com.datastax.driver.core.Session
 import com.datastax.driver.core.utils.Bytes
 import akka.actor.ActorLogging
+import scala.annotation.tailrec
+import akka.actor.DeadLetterSuppression
 
 private[query] object EventsByTagFetcher {
 
   private final case class InitResultSet(rs: ResultSet)
-  private case object Fetched
+  private case object Fetched extends DeadLetterSuppression
 
   def props(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int, replyTo: ActorRef,
             session: Session, preparedSelect: PreparedStatement, seqNumbers: SequenceNumbers,
@@ -80,74 +82,50 @@ private[query] class EventsByTagFetcher(
       replyTo ! ReplayDone(count, seqNumbers)
       context.stop(self)
     } else {
-      var n = resultSet.getAvailableWithoutFetching
-      var abort = false
-      while (n > 0 && !abort) {
-        n -= 1
-        val row = resultSet.one()
-        val pid = row.getString("persistence_id")
-        val seqNr = row.getLong("sequence_nr")
 
-        seqNumbers.isNext(pid, seqNr) match {
-          case SequenceNumbers.Yes | SequenceNumbers.PossiblyFirst =>
-            seqNumbers = seqNumbers.updated(pid, seqNr)
-            val m = persistentFromByteBuffer(row.getBytes("message"))
-            val offs = row.getUUID("timestamp")
-            if (compare(offs, highestOffset) <= 0)
-              log.debug("Events were not ordered by timestamp. Consider increasing eventual-consistency-delay " +
-                "if the order is of importance.")
-            highestOffset = offs
-            count += 1
-            val eventEnvelope = UUIDEventEnvelope(
-              offset = offs,
-              persistenceId = pid,
-              sequenceNr = row.getLong("sequence_nr"),
-              event = m.payload)
-            replyTo ! eventEnvelope
+      @tailrec def loop(n: Int): Unit = {
+        if (n == 0) {
+          val more: Future[ResultSet] = resultSet.fetchMoreResults()
+          more.map(_ => Fetched).pipeTo(self)
+        } else {
+          val row = resultSet.one()
+          val pid = row.getString("persistence_id")
+          val seqNr = row.getLong("sequence_nr")
 
-          case SequenceNumbers.After =>
-            abort = true
-            replyTo ! ReplayAborted(seqNumbers, pid, seqNumbers.get(pid) + 1, seqNr)
+          seqNumbers.isNext(pid, seqNr) match {
+            case SequenceNumbers.Yes | SequenceNumbers.PossiblyFirst =>
+              seqNumbers = seqNumbers.updated(pid, seqNr)
+              val m = persistentFromByteBuffer(row.getBytes("message"))
+              val offs = row.getUUID("timestamp")
+              if (compare(offs, highestOffset) <= 0)
+                log.debug("Events were not ordered by timestamp. Consider increasing eventual-consistency-delay " +
+                  "if the order is of importance.")
+              highestOffset = offs
+              count += 1
+              val eventEnvelope = UUIDEventEnvelope(
+                offset = offs,
+                persistenceId = pid,
+                sequenceNr = row.getLong("sequence_nr"),
+                event = m.payload)
+              replyTo ! eventEnvelope
+              loop(n - 1)
 
-          case SequenceNumbers.Before =>
-            // duplicate, discard
-            log.debug(s"Discarding duplicate. Got sequence number [$seqNr] for [$pid], " +
-              s"but current sequence number is [${seqNumbers.get(pid)}]")
+            case SequenceNumbers.After =>
+              replyTo ! ReplayAborted(seqNumbers, pid, seqNumbers.get(pid) + 1, seqNr)
+            // end loop
+
+            case SequenceNumbers.Before =>
+              // duplicate, discard
+              log.debug(s"Discarding duplicate. Got sequence number [$seqNr] for [$pid], " +
+                s"but current sequence number is [${seqNumbers.get(pid)}]")
+              loop(n - 1)
+          }
         }
-
       }
 
-      if (!abort) {
-        val more: Future[ResultSet] = resultSet.fetchMoreResults()
-        more.map(_ => Fetched).pipeTo(self)
-      }
-    }
-  }
+      loop(resultSet.getAvailableWithoutFetching)
 
-  // FIXME remove
-  def printAll(): Unit = {
-    val iter = session.execute(s"SELECT * FROM akka.eventsbytag3").iterator
-    while (iter.hasNext()) {
-      val row = iter.next()
-      val pid = row.getString("persistence_id")
-      val seqNr = row.getLong("sequence_nr")
-      val m = persistentFromByteBuffer(row.getBytes("message"))
-      val offs = row.getUUID("timestamp")
-      val buck = row.getString("timebucket")
-      println(s"# replay ALL $buck $pid $seqNr $offs (${offs.timestamp}) ${m.payload}  [${row.getString("tag3")}]") // FIXME
     }
-
-    val iter2 = session.execute(s"SELECT * FROM akka.messages").iterator
-    while (iter2.hasNext()) {
-      val row = iter2.next()
-      val pid = row.getString("persistence_id")
-      val seqNr = row.getLong("sequence_nr")
-      val m = persistentFromByteBuffer(row.getBytes("message"))
-      val offs = row.getUUID("timestamp")
-      val buck = row.getString("timebucket")
-      println(s"# replay ALL MESSAGES $buck $pid $seqNr $offs (${offs.timestamp}) ${m.payload}  [${row.getString("tag3")}]") // FIXME
-    }
-
   }
 
 }

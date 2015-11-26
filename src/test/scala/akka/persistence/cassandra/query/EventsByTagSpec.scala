@@ -42,7 +42,7 @@ object EventsByTagSpec {
   val today = LocalDate.now(ZoneOffset.UTC)
 
   val config = ConfigFactory.parseString(s"""
-    akka.loglevel = DEBUG # FIXME change
+    akka.loglevel = INFO
     akka.test.single-expect-default = 10s
     akka.persistence.journal.plugin = "cassandra-journal"
     cassandra-journal {
@@ -61,6 +61,7 @@ object EventsByTagSpec {
         pink = 1
         yellow = 1
         apple = 2
+        banana = 2
         T1 = 1
         T2 = 2
         T3 = 3
