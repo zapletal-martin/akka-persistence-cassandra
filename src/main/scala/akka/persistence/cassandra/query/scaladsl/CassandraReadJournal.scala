@@ -20,6 +20,7 @@ import java.util.UUID
 import java.time.ZoneOffset
 import java.time.LocalDate
 import com.datastax.driver.core.PreparedStatement
+import akka.stream.ActorAttributes
 
 object CassandraReadJournal {
   final val Identifier = "cassandra-query-journal"
@@ -73,6 +74,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
       Some(refreshInterval), queryPluginConfig, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("eventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
+      .withAttributes(ActorAttributes.dispatcher(pluginDispatcher))
   }
 
   override def currentEventsByTag(tag: String, offset: Long = 0L): Source[EventEnvelope, Unit] = {
@@ -80,6 +82,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
     Source.actorPublisher[EventEnvelope](EventsByTagPublisher.props(tag, offsetUuid(offset),
       None, queryPluginConfig, session, selectStatement(tag))).mapMaterializedValue(_ ⇒ ())
       .named("currentEventsByTag-" + URLEncoder.encode(tag, ByteString.UTF_8))
+      .withAttributes(ActorAttributes.dispatcher(pluginDispatcher))
   }
 
   // FIXME we should also provide queries that takes a UUID as offset parameter and returns a

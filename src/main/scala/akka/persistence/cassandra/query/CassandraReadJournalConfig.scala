@@ -15,9 +15,9 @@ class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJou
     config.getDuration("eventual-consistency-delay", MILLISECONDS).millis
   val wrongSequenceNumberOrderTimeout: FiniteDuration =
     config.getDuration("wrong-sequence-number-order-timeout", MILLISECONDS).millis
+  val pluginDispatcher: String = config.getString("plugin-dispatcher")
 
   val eventsByTagView: String = writePluginConfig.eventsByTagView
   val keyspace: String = writePluginConfig.keyspace
 
-  // FIXME use-dispatcher setting
 }

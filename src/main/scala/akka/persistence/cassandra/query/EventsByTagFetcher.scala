@@ -25,7 +25,7 @@ private[query] object EventsByTagFetcher {
             session: Session, preparedSelect: PreparedStatement, seqNumbers: SequenceNumbers,
             settings: CassandraReadJournalConfig): Props =
     Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, toOffset, limit, replyTo, session, preparedSelect,
-      seqNumbers, settings))
+      seqNumbers, settings)).withDispatcher(settings.pluginDispatcher)
 
 }
 
