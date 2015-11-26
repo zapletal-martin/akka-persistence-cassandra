@@ -11,7 +11,6 @@ import akka.actor.OneForOneStrategy
 import akka.actor.Props
 import akka.actor.SupervisorStrategy
 import akka.persistence.cassandra.journal.CassandraJournal
-import akka.persistence.query.EventEnvelope
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.Cancel
 import akka.stream.actor.ActorPublisherMessage.Request
@@ -39,13 +38,6 @@ private[query] object EventsByTagPublisher {
 
   private[query] case object Continue
 
-  private[query] final case class TaggedEventEnvelope(
-    offset: UUID,
-    persistenceId: String,
-    sequenceNr: Long,
-    event: Any)
-    extends DeadLetterSuppression with NoSerializationVerificationNeeded
-
   private[query] case class ReplayDone(count: Int, seqNumbers: SequenceNumbers)
     extends DeadLetterSuppression
   private[query] case class ReplayAborted(
@@ -62,7 +54,7 @@ private[query] object EventsByTagPublisher {
 private[query] abstract class AbstractEventsByTagPublisher(
   val tag: String, val fromOffset: UUID,
   val settings: CassandraReadJournalConfig, val session: Session, val preparedSelect: PreparedStatement)
-  extends ActorPublisher[EventEnvelope] with DeliveryBuffer[EventEnvelope] with ActorLogging {
+  extends ActorPublisher[UUIDEventEnvelope] with DeliveryBuffer[UUIDEventEnvelope] with ActorLogging {
   import EventsByTagPublisher._
   import settings.maxBufferSize
 
@@ -130,12 +122,8 @@ private[query] abstract class AbstractEventsByTagPublisher(
   }
 
   def replaying(limit: Int): Receive = {
-    case TaggedEventEnvelope(offs, pid, seqNr, evt) ⇒
-      buf :+= EventEnvelope(
-        offset = UUIDs.unixTimestamp(offs),
-        persistenceId = pid,
-        sequenceNr = seqNr,
-        event = evt)
+    case env @ UUIDEventEnvelope(offs, _, _, _) ⇒
+      buf :+= env
       currOffset = offs
       deliverBuf()
 

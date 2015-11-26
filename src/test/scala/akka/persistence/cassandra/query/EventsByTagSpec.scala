@@ -36,6 +36,7 @@ import java.time.ZoneId
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import scala.util.Try
+import akka.persistence.query.scaladsl.CurrentEventsByTagQuery
 
 object EventsByTagSpec {
   val today = LocalDate.now(ZoneOffset.UTC)
@@ -58,6 +59,7 @@ object EventsByTagSpec {
         black = 1
         blue = 1
         pink = 1
+        yellow = 1
         apple = 2
         T1 = 1
         T2 = 2
@@ -98,7 +100,7 @@ object EventsByTagSpec {
   implicit class ProbeOps(val probe: TestSubscriber.Probe[Any]) {
     def expectNextPF[T](f: PartialFunction[Any, T]): T = {
       val next = probe.expectNext()
-      assert(f.isDefinedAt(next))
+      assert(f.isDefinedAt(next), s"got unexpected $next")
       f(next)
     }
   }
@@ -106,7 +108,7 @@ object EventsByTagSpec {
 }
 
 class ColorFruitTagger extends WriteEventAdapter {
-  val colors = Set("green", "black", "blue")
+  val colors = Set("green", "black", "blue", "yellow")
   val fruits = Set("apple", "banana")
   override def toJournal(event: Any): Any = event match {
     case s: String ⇒
@@ -191,9 +193,9 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
     super.afterAll()
   }
 
-  "Cassandra query EventsByTag" must {
-    "implement standard EventsByTagQuery" in {
-      queries.isInstanceOf[EventsByTagQuery] should ===(true)
+  "Cassandra query currentEventsByTag" must {
+    "implement standard CurrentEventsByTagQuery" in {
+      queries.isInstanceOf[CurrentEventsByTagQuery] should ===(true)
     }
 
     "find existing events" in {
@@ -261,7 +263,7 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe.expectComplete() // green cucumber not seen
     }
 
-    "find events from offset" in {
+    "find events from timestamp offset" in {
       val greenSrc1 = queries.currentEventsByTag(tag = "green", offset = 0L)
       val probe1 = greenSrc1.runWith(TestSink.probe[Any])
       probe1.request(2)
@@ -274,8 +276,22 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe2.request(10)
       probe2.expectNextPF { case e @ EventEnvelope(_, "a", 3L, "a green banana") => e }
       probe2.expectNextPF { case e @ EventEnvelope(_, "b", 2L, "a green leaf") => e }
-      probe2.expectNextPF { case e @ EventEnvelope(_, "c", 1L, "a green cucumber") => e }
-      probe2.expectComplete()
+      probe2.cancel()
+    }
+
+    "find events from UUID offset" in {
+      val greenSrc1 = queries.currentEventsByTag(tag = "green", offset = queries.firstOffset)
+      val probe1 = greenSrc1.runWith(TestSink.probe[Any])
+      probe1.request(2)
+      probe1.expectNextPF { case e @ UUIDEventEnvelope(_, "a", 2L, "a green apple") => e }
+      val offs: UUID = probe1.expectNextPF { case e @ UUIDEventEnvelope(_, "a", 3L, "a green banana") => e }.offset
+      probe1.cancel()
+
+      val greenSrc2 = queries.currentEventsByTag(tag = "green", offs)
+      val probe2 = greenSrc2.runWith(TestSink.probe[Any])
+      probe2.request(10)
+      probe2.expectNextPF { case e @ UUIDEventEnvelope(_, "b", 2L, "a green leaf") => e }
+      probe2.cancel()
     }
 
     "find existing events that spans several time buckets" in {
@@ -306,7 +322,11 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
     }
   }
 
-  "Cassandra live query EventsByTag" must {
+  "Cassandra live eventsByTag" must {
+    "implement standard EventsByTagQuery" in {
+      queries.isInstanceOf[EventsByTagQuery] should ===(true)
+    }
+
     "find new events" in {
       val d = system.actorOf(TestActor.props("d"))
 
@@ -328,7 +348,7 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe.cancel()
     }
 
-    "find events from offset" in {
+    "find events from timestamp offset " in {
       val greenSrc1 = queries.eventsByTag(tag = "green", offset = 0L)
       val probe1 = greenSrc1.runWith(TestSink.probe[Any])
       probe1.request(2)
@@ -342,6 +362,23 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
       probe2.expectNextPF { case e @ EventEnvelope(_, "a", 3L, "a green banana") => e }
       probe2.expectNextPF { case e @ EventEnvelope(_, "b", 2L, "a green leaf") => e }
       probe2.expectNextPF { case e @ EventEnvelope(_, "c", 1L, "a green cucumber") => e }
+      probe2.expectNoMsg(100.millis)
+      probe2.cancel()
+    }
+
+    "find events from UUID offset " in {
+      val greenSrc1 = queries.eventsByTag(tag = "green", offset = queries.firstOffset)
+      val probe1 = greenSrc1.runWith(TestSink.probe[Any])
+      probe1.request(2)
+      probe1.expectNextPF { case e @ UUIDEventEnvelope(_, "a", 2L, "a green apple") => e }
+      val offs = probe1.expectNextPF { case e @ UUIDEventEnvelope(_, "a", 3L, "a green banana") => e }.offset
+      probe1.cancel()
+
+      val greenSrc2 = queries.eventsByTag(tag = "green", offs)
+      val probe2 = greenSrc2.runWith(TestSink.probe[Any])
+      probe2.request(10)
+      probe2.expectNextPF { case e @ UUIDEventEnvelope(_, "b", 2L, "a green leaf") => e }
+      probe2.expectNextPF { case e @ UUIDEventEnvelope(_, "c", 1L, "a green cucumber") => e }
       probe2.expectNoMsg(100.millis)
       probe2.cancel()
     }
@@ -456,29 +493,24 @@ class EventsByTagSpec extends TestKit(ActorSystem("EventsByTagSpec", EventsByTag
     "stream many events" in {
       val e = system.actorOf(TestActor.props("e"))
 
-      val src = queries.eventsByTag(tag = "green", offset = 0L)
+      val src = queries.eventsByTag(tag = "yellow", offset = 0L)
       val probe = src.runWith(TestSink.probe[Any])
-      probe.request(4)
-      probe.expectNextPF { case e @ EventEnvelope(_, "a", 2L, "a green apple") => e }
-      probe.expectNextPF { case e @ EventEnvelope(_, "a", 3L, "a green banana") => e }
-      probe.expectNextPF { case e @ EventEnvelope(_, "b", 2L, "a green leaf") => e }
-      probe.expectNextPF { case e @ EventEnvelope(_, "c", 1L, "a green cucumber") => e }
 
       for (n <- 1 to 100)
-        e ! s"green-$n"
+        e ! s"yellow-$n"
 
       probe.request(200)
       for (n <- 1 to 100) {
-        val Expected = s"green-$n"
+        val Expected = s"yellow-$n"
         probe.expectNextPF { case e @ EventEnvelope(_, "e", _, Expected) => e }
       }
       probe.expectNoMsg(100.millis)
 
       for (n <- 101 to 200)
-        e ! s"green-$n"
+        e ! s"yellow-$n"
 
       for (n <- 101 to 200) {
-        val Expected = s"green-$n"
+        val Expected = s"yellow-$n"
         probe.expectNextPF { case e @ EventEnvelope(_, "e", _, Expected) => e }
       }
       probe.expectNoMsg(100.millis)

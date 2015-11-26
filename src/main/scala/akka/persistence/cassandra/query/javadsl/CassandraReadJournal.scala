@@ -1,10 +1,11 @@
 package akka.persistence.cassandra.query.javadsl
 
 import scala.concurrent.duration._
-
 import akka.persistence.query.EventEnvelope
 import akka.persistence.query.javadsl._
 import akka.stream.javadsl.Source
+import akka.persistence.cassandra.query.UUIDEventEnvelope
+import java.util.UUID
 
 /**
  * Java API: [[akka.persistence.query.javadsl.ReadJournal]] implementation for Cassandra.
@@ -27,10 +28,20 @@ class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query
   with EventsByTagQuery
   with CurrentEventsByTagQuery {
 
+  def offsetUuid(timestamp: Long): UUID = scaladslReadJournal.offsetUuid(timestamp)
+
+  def firstOffset: UUID = scaladslReadJournal.firstOffset
+
   override def eventsByTag(tag: String, offset: Long): Source[EventEnvelope, Unit] =
     scaladslReadJournal.eventsByTag(tag, offset).asJava
 
+  def eventsByTag(tag: String, offset: UUID): Source[UUIDEventEnvelope, Unit] =
+    scaladslReadJournal.eventsByTag(tag, offset).asJava
+
   override def currentEventsByTag(tag: String, offset: Long): Source[EventEnvelope, Unit] =
+    scaladslReadJournal.currentEventsByTag(tag, offset).asJava
+
+  def currentEventsByTag(tag: String, offset: UUID): Source[UUIDEventEnvelope, Unit] =
     scaladslReadJournal.currentEventsByTag(tag, offset).asJava
 }
 

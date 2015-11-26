@@ -98,7 +98,7 @@ private[query] class EventsByTagFetcher(
                 "if the order is of importance.")
             highestOffset = offs
             count += 1
-            val eventEnvelope = TaggedEventEnvelope(
+            val eventEnvelope = UUIDEventEnvelope(
               offset = offs,
               persistenceId = pid,
               sequenceNr = row.getLong("sequence_nr"),
