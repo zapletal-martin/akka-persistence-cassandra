@@ -4,7 +4,7 @@ import java.util.UUID
 
 /**
  * Event wrapper adding meta data for the events in the result stream of
- *  query, or similar queries.
+ * `eventsByTag` query, or similar queries.
  */
 final case class UUIDEventEnvelope(
   offset: UUID,

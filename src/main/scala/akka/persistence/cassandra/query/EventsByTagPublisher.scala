@@ -1,9 +1,13 @@
 package akka.persistence.cassandra.query
 
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 import java.util.UUID
+
 import scala.concurrent.duration._
+
 import akka.actor.ActorLogging
 import akka.actor.DeadLetterSuppression
 import akka.actor.NoSerializationVerificationNeeded
@@ -17,12 +21,7 @@ import akka.stream.actor.ActorPublisherMessage.Request
 import com.datastax.driver.core.PreparedStatement
 import com.datastax.driver.core.Session
 import com.datastax.driver.core.utils.UUIDs
-import java.time.LocalDateTime
-import java.time.temporal.ChronoUnit
 
-/**
- * INTERNAL API
- */
 private[query] object EventsByTagPublisher {
 
   def props(tag: String, fromOffset: UUID, refreshInterval: Option[FiniteDuration], settings: CassandraReadJournalConfig,
@@ -48,9 +47,6 @@ private[query] object EventsByTagPublisher {
 
 }
 
-/**
- * INTERNAL API
- */
 private[query] abstract class AbstractEventsByTagPublisher(
   val tag: String, val fromOffset: UUID,
   val settings: CassandraReadJournalConfig, val session: Session, val preparedSelect: PreparedStatement)

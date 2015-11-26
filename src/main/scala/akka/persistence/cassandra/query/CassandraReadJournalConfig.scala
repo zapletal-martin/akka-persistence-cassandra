@@ -5,7 +5,7 @@ import com.typesafe.config.Config
 import com.datastax.driver.core.ConsistencyLevel
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 
-class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJournalConfig) {
+private[query] class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJournalConfig) {
   val refreshInterval: FiniteDuration = config.getDuration("refresh-interval", MILLISECONDS).millis
   val maxBufferSize: Int = config.getInt("max-buffer-size")
   val fetchSize: Int = config.getInt("fetch-size")
