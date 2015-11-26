@@ -22,16 +22,17 @@ private[query] object EventsByTagFetcher {
   private case object Fetched
 
   def props(tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int, replyTo: ActorRef,
-            session: Session, preparedSelect: PreparedStatement, seqNumbers: SequenceNumbers): Props =
+            session: Session, preparedSelect: PreparedStatement, seqNumbers: SequenceNumbers,
+            settings: CassandraReadJournalConfig): Props =
     Props(new EventsByTagFetcher(tag, timeBucket, fromOffset, toOffset, limit, replyTo, session, preparedSelect,
-      seqNumbers))
+      seqNumbers, settings))
 
 }
 
 private[query] class EventsByTagFetcher(
   tag: String, timeBucket: String, fromOffset: UUID, toOffset: UUID, limit: Int,
   replyTo: ActorRef, session: Session, preparedSelect: PreparedStatement,
-  seqN: SequenceNumbers)
+  seqN: SequenceNumbers, settings: CassandraReadJournalConfig)
   extends Actor with ActorLogging {
 
   import context.dispatcher
@@ -52,8 +53,7 @@ private[query] class EventsByTagFetcher(
 
   override def preStart(): Unit = {
     val boundStmt = preparedSelect.bind(tag, timeBucket, fromOffset, toOffset, limit: Integer)
-    // FIXME tune fetch size
-    //            boundStmt.setFetchSize(2)
+    boundStmt.setFetchSize(2)
     val init: Future[ResultSet] = session.executeAsync(boundStmt)
     init.map(InitResultSet.apply).pipeTo(self)
   }

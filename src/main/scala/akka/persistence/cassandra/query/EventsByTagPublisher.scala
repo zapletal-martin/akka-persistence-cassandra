@@ -125,7 +125,7 @@ private[query] abstract class AbstractEventsByTagPublisher(
     log.debug("query for tag [{}] from [{}] [{}] limit [{}]", tag, currTimeBucket, currOffset, limit)
     val toOffset = UUIDs.endOf(System.currentTimeMillis() - eventualConsistencyDelayMillis)
     context.actorOf(EventsByTagFetcher.props(tag, currTimeBucket, currOffset, toOffset, limit, self,
-      session, preparedSelect, seqNumbers))
+      session, preparedSelect, seqNumbers, settings))
     context.become(replaying(limit))
   }
 
