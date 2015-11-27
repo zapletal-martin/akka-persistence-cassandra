@@ -36,6 +36,8 @@ object CassandraReadJournal {
  */
 class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query.scaladsl.CassandraReadJournal)
   extends ReadJournal
+  with EventsByPersistenceIdQuery
+  with CurrentEventsByPersistenceIdQuery
   with EventsByTagQuery
   with CurrentEventsByTagQuery {
 
@@ -132,5 +134,19 @@ class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query
    */
   def currentEventsByTag(tag: String, offset: UUID): Source[UUIDEventEnvelope, Unit] =
     scaladslReadJournal.currentEventsByTag(tag, offset).asJava
+
+
+  override def eventsByPersistenceId(
+      persistenceId: String,
+      fromSequenceNr: Long,
+      toSequenceNr: Long): Source[EventEnvelope, Unit] =
+    scaladslReadJournal.eventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr).asJava
+
+
+  override def currentEventsByPersistenceId(
+      persistenceId: String,
+      fromSequenceNr: Long,
+      toSequenceNr: Long): Source[EventEnvelope, Unit] =
+    scaladslReadJournal.currentEventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr).asJava
 }
 

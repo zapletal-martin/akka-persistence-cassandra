@@ -8,10 +8,7 @@ import akka.actor.ExtendedActorSystem
 import akka.persistence.cassandra.journal.CassandraJournal
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 import akka.persistence.cassandra.journal.CassandraStatements
-import akka.persistence.cassandra.query.CassandraReadJournalConfig
-import akka.persistence.cassandra.query.CassandraReadStatements
-import akka.persistence.cassandra.query.EventsByTagPublisher
-import akka.persistence.cassandra.query.UUIDEventEnvelope
+import akka.persistence.cassandra.query._
 import akka.persistence.query._
 import akka.persistence.query.scaladsl._
 import akka.stream.ActorAttributes
@@ -22,6 +19,8 @@ import com.datastax.driver.core.utils.UUIDs
 import com.typesafe.config.Config
 import akka.persistence.cassandra.retry
 import com.datastax.driver.core.Session
+
+import scala.concurrent.duration.FiniteDuration
 
 object CassandraReadJournal {
   /**
@@ -50,6 +49,8 @@ object CassandraReadJournal {
  */
 class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   extends ReadJournal
+  with EventsByPersistenceIdQuery
+  with CurrentEventsByPersistenceIdQuery
   with EventsByTagQuery
   with CurrentEventsByTagQuery {
 
@@ -78,7 +79,9 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         session.execute(writeStatements.createKeyspace)
       }
     }
+
     session.execute(writeStatements.createTable)
+
     for (tagId <- 1 to writePluginConfig.maxTagId)
       session.execute(writeStatements.createEventsByTagMaterializedView(tagId))
 
@@ -88,6 +91,15 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
           .setConsistencyLevel(queryPluginConfig.readConsistency)
       }.toVector
 
+    val preparedSelectEventsByPersistenceId: PreparedStatement =
+      session
+        .prepare(queryStatements.selectMessages)
+        .setConsistencyLevel(queryPluginConfig.readConsistency)
+
+    val preparedSelectInUse: PreparedStatement =
+      session
+        .prepare(queryStatements.selectInUse)
+        .setConsistencyLevel(queryPluginConfig.readConsistency)
   }
 
   private lazy val cassandraSession: CassandraSession = new CassandraSession
@@ -220,4 +232,44 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
       .withAttributes(ActorAttributes.dispatcher(pluginDispatcher))
   }
 
+
+  override def eventsByPersistenceId(
+      persistenceId: String,
+      fromSequenceNr: Long,
+      toSequenceNr: Long): Source[EventEnvelope, Unit] = {
+
+    eventsByPersistenceId(
+      persistenceId,
+      fromSequenceNr,
+      toSequenceNr,
+      Some(queryPluginConfig.refreshInterval))
+  }
+
+  override def currentEventsByPersistenceId(
+      persistenceId: String,
+      fromSequenceNr: Long,
+      toSequenceNr: Long): Source[EventEnvelope, Unit] =
+    eventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr, None)
+
+  private[this] def eventsByPersistenceId(
+    persistenceId: String,
+    fromSequenceNr: Long,
+    toSequenceNr: Long,
+    refreshInterval: Option[FiniteDuration]) = {
+    val name = s"eventsByPersistenceId-$persistenceId"
+
+    Source.actorPublisher[EventEnvelope](
+      EventsByPersistenceIdPublisher.props(
+        persistenceId,
+        fromSequenceNr,
+        toSequenceNr,
+        refreshInterval,
+        queryPluginConfig.maxBufferSize,
+        queryPluginConfig.targetPartitionSize,
+        cassandraSession.preparedSelectEventsByPersistenceId,
+        cassandraSession.preparedSelectInUse,
+        cassandraSession.session))
+      .mapMaterializedValue(_ => ())
+      .named(name)
+  }
 }
