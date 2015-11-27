@@ -6,7 +6,7 @@ import com.datastax.driver.core.ConsistencyLevel
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 import akka.persistence.cassandra.journal.TimeBucket
 
-private[query] class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJournalConfig) {
+class CassandraReadJournalConfig(config: Config, writePluginConfig: CassandraJournalConfig) {
   val refreshInterval: FiniteDuration = config.getDuration("refresh-interval", MILLISECONDS).millis
   val maxBufferSize: Int = config.getInt("max-buffer-size")
   val fetchSize: Int = config.getInt("fetch-size")
@@ -20,5 +20,6 @@ private[query] class CassandraReadJournalConfig(config: Config, writePluginConfi
 
   val eventsByTagView: String = writePluginConfig.eventsByTagView
   val keyspace: String = writePluginConfig.keyspace
-
+  val targetPartitionSize: Int = writePluginConfig.targetPartitionSize
+  val table: String = writePluginConfig.table
 }
