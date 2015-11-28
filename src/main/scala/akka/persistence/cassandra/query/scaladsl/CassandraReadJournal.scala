@@ -93,7 +93,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
 
     val preparedSelectEventsByPersistenceId: PreparedStatement =
       session
-        .prepare(queryStatements.selectMessages)
+        .prepare(writeStatements.selectMessages)
         .setConsistencyLevel(queryPluginConfig.readConsistency)
 
     val preparedSelectInUse: PreparedStatement =

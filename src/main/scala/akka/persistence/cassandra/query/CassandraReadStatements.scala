@@ -16,13 +16,4 @@ trait CassandraReadStatements {
         ORDER BY timestamp ASC
         LIMIT ?
     """
-
-  // TODO: Duplicated in CassandraStatements
-  def selectMessages = s"""
-      SELECT * FROM $tableName WHERE
-        persistence_id = ? AND
-        partition_nr = ? AND
-        sequence_nr >= ? AND
-        sequence_nr <= ?
-    """
 }
