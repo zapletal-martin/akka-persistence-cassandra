@@ -25,10 +25,4 @@ trait CassandraReadStatements {
         sequence_nr >= ? AND
         sequence_nr <= ?
     """
-
-  def selectInUse = s"""
-     SELECT used from $tableName WHERE
-      persistence_id = ? AND
-      partition_nr = ?
-   """
 }

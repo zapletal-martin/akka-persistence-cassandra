@@ -22,6 +22,7 @@ private[query] object EventsByPersistenceIdPublisher {
       targetPartitionSize: Int,
       selectEventsByPersistenceId: PreparedStatement,
       selectInUse: PreparedStatement,
+      selectDeletedTo: PreparedStatement,
       session: Session): Props =
     Props(
       new EventsByPersistenceIdPublisher(
@@ -33,12 +34,10 @@ private[query] object EventsByPersistenceIdPublisher {
         targetPartitionSize,
         selectEventsByPersistenceId,
         selectInUse,
+        selectDeletedTo,
         session))
 }
 
-// TODO: Decouple database.
-// TODO: Query index tables instead.
-// TODO: Generic message iterator to handle different tables etc.
 private[query] class EventsByPersistenceIdPublisher(
     persistenceId: String,
     fromSeqNr: Long,
@@ -48,17 +47,18 @@ private[query] class EventsByPersistenceIdPublisher(
     targetPartitionSize: Int,
     selectEventsByPersistenceId: PreparedStatement,
     selectInUse: PreparedStatement,
+    selectDeletedTo: PreparedStatement,
     session: Session)
   extends QueryActorPublisher[EventEnvelope, Long](refreshInterval, maxBufSize) {
 
   private[this] val serialization = SerializationExtension(context.system)
 
-  private[this] val step = 50l
+  private[this] val step = maxBufSize
 
   override protected def query(state: Long, max: Long): Future[Vector[EventEnvelope]] = {
     implicit val ec = context.dispatcher
 
-    // TODO: Async?
+    // TODO: Replace by a more efficient approach.
     Future {
       val from = state
       val to = Math.min(Math.min(state + step, toSeqNr), state + max)
@@ -69,11 +69,11 @@ private[query] class EventsByPersistenceIdPublisher(
             from,
             to,
             targetPartitionSize,
-            maxBufSize)(selectEventsByPersistenceId, selectInUse, session, serialization)
+            maxBufSize.toLong)(selectEventsByPersistenceId, selectInUse, selectDeletedTo, session, serialization)
             .toVector)
         .map(r => toEventEnvelope(r._2, r._1 - 1))
         .toVector
-
+      
       ret
     }
   }

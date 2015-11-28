@@ -98,7 +98,12 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
 
     val preparedSelectInUse: PreparedStatement =
       session
-        .prepare(queryStatements.selectInUse)
+        .prepare(writeStatements.selectInUse)
+        .setConsistencyLevel(queryPluginConfig.readConsistency)
+
+    val preparedSelectDeletedTo =
+      session
+        .prepare(writeStatements.selectDeletedTo)
         .setConsistencyLevel(queryPluginConfig.readConsistency)
   }
 
@@ -268,6 +273,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         queryPluginConfig.targetPartitionSize,
         cassandraSession.preparedSelectEventsByPersistenceId,
         cassandraSession.preparedSelectInUse,
+        cassandraSession.preparedSelectDeletedTo,
         cassandraSession.session))
       .mapMaterializedValue(_ => ())
       .named(name)

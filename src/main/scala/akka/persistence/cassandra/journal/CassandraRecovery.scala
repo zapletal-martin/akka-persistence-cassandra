@@ -3,6 +3,7 @@ package akka.persistence.cassandra.journal
 import java.lang.{ Long => JLong }
 
 import akka.actor.ActorLogging
+import akka.persistence.cassandra.EventsByPersistenceIdIterator
 
 import scala.concurrent._
 
@@ -33,9 +34,19 @@ trait CassandraRecovery extends ActorLogging {
   }
 
   def replayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(replayCallback: (PersistentRepr) => Unit): Unit = {
-    new MessageIterator(persistenceId, fromSequenceNr, toSequenceNr, max).foreach(msg => {
+    /*new MessageIterator(persistenceId, fromSequenceNr, toSequenceNr, max).foreach(msg => {
       replayCallback(msg)
-    })
+    })*/
+
+    new EventsByPersistenceIdIterator(
+      persistenceId,
+      fromSequenceNr,
+      toSequenceNr,
+      targetPartitionSize,
+      max)(preparedSelectMessages, preparedCheckInUse, preparedSelectDeletedTo, session, serialization)
+      .foreach(msg => {
+        replayCallback(msg)
+      })
   }
 
   /**
