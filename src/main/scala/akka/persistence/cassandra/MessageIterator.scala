@@ -10,7 +10,7 @@ class MessageIterator[T >: Null](
     fromSequenceNr: Long,
     toSequenceNr: Long,
     targetPartitionSize: Int,
-    max: Int,
+    max: Long,
     extractor: Row => T,
     default: T,
     sequenceNumber: T => Long,
@@ -31,7 +31,7 @@ class MessageIterator[T >: Null](
     inUse,
     sequenceNumberColumn)
 
-  private var mcnt = 0
+  private var mcnt = 0L
 
   private var c: T = null
   // TODO: FIX

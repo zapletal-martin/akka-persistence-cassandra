@@ -3,9 +3,6 @@ package akka.persistence.cassandra
 import java.lang.{Long => JLong}
 import java.nio.ByteBuffer
 
-import akka.persistence.cassandra.journal.CassandraJournalConfig
-import akka.persistence.cassandra.query.{CassandraReadJournalConfig, CassandraReadStatements}
-
 import scala.collection.JavaConverters._
 
 import akka.persistence.PersistentRepr
@@ -14,14 +11,17 @@ import akka.serialization.Serialization
 import com.datastax.driver.core.utils.Bytes
 import com.datastax.driver.core.{PreparedStatement, ResultSet, Row, Session}
 
+// TODO: Refactor.
+// TODO: Replace by more appropriate asynchronous abstraction.
 final class EventsByPersistenceIdIterator(
     partitionId: String,
     fromSequenceNr: Long,
     toSequenceNr: Long,
     targetPartitionSize: Int,
-    max: Int)(
+    max: Long)(
     preparedSelectMessages: PreparedStatement,
     preparedCheckInUse: PreparedStatement,
+    preparedSelectDeletedTo: PreparedStatement,
     session: Session,
     serialization: Serialization)
   extends Iterator[PersistentRepr] {
@@ -69,8 +69,9 @@ final class EventsByPersistenceIdIterator(
       fromSnr: JLong,
       toSnr: JLong)).iterator.asScala
 
-  // TODO: Fix.
-  private[this] def highestDeletedSequenceNumber(partitionKey: String): Long = 0l
+  private[this] def highestDeletedSequenceNumber(partitionKey: String): Long =
+    Option(session.execute(preparedSelectDeletedTo.bind(partitionKey)).one())
+      .map(_.getLong("deleted_to")).getOrElse(0)
 
   private[this] def persistentFromByteBuffer(
       serialization: Serialization,
