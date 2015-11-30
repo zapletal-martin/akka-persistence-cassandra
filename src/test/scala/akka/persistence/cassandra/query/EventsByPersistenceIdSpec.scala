@@ -23,6 +23,7 @@ object EventsByPersistenceIdSpec {
     cassandra-journal.port = ${CassandraLauncher.randomPort}
     cassandra-query-journal.max-buffer-size = 10
     cassandra-query-journal.refresh-interval = 0.5s
+    cassandra-journal.target-partition-size = 15
                """
 }
 
@@ -217,6 +218,32 @@ class EventsByPersistenceIdSpec
         .request(5)
         .expectNext("k-8", "k-9", "k-10", "k-11", "k-12")
         .expectNoMsg(1000.millis)
+    }
+
+    "produce correct sequence of sequence numbers and offsets" in {
+      val ref = setup("l", 3)
+
+      val src = queries.currentEventsByPersistenceId("l", 0L, Long.MaxValue)
+      src.map(x => (x.persistenceId, x.sequenceNr, x.offset)).runWith(TestSink.probe[Any])
+        .request(3)
+        .expectNext(
+          ("l", 1, 0),
+          ("l", 2, 1),
+          ("l", 3, 2))
+        .expectComplete()
+    }
+
+    "produce correct sequence of events across multiple partitions" in {
+      val ref = setup("m", 20)
+
+      val src = queries.currentEventsByPersistenceId("m", 0L, Long.MaxValue)
+      src.map(_.event).runWith(TestSink.probe[Any])
+        .request(10)
+        .expectNextN((1 to 10).map(i => s"m-$i"))
+        .expectNoMsg(500.millis)
+        .request(10)
+        .expectNextN((11 to 20).map(i => s"m-$i"))
+        .expectComplete()
     }
   }
 }

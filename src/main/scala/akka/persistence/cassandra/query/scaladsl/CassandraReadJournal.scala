@@ -302,7 +302,8 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         cassandraSession.preparedSelectEventsByPersistenceId,
         cassandraSession.preparedSelectInUse,
         cassandraSession.preparedSelectDeletedTo,
-        cassandraSession.session))
+        cassandraSession.session,
+        queryPluginConfig))
       .mapMaterializedValue(_ => ())
       .named(name)
   }

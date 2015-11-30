@@ -1,16 +1,25 @@
 package akka.persistence.cassandra.query
 
-import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.{ExecutionContext, Future}
-
-import akka.actor.{Actor, ActorLogging}
+import akka.actor._
 import akka.pattern.pipe
+import akka.persistence.cassandra.query.QueryActorPublisher.{ReplayFailed, ReplayDone}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request, SubscriptionTimeoutExceeded}
+
+import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.ExecutionContext
+import scala.reflect.ClassTag
+
+object QueryActorPublisher {
+  private[query] case object ReplayDone extends DeadLetterSuppression
+  private[query] final case class ReplayFailed(cause: Throwable)
+    extends DeadLetterSuppression with NoSerializationVerificationNeeded
+}
 
 //TODO: Optimizations - manage the buffer size efficienly, e.g. based on nr requests, remaining elements etc.
 //TODO: Database timeout, retry and failure handling.
 //TODO: Write tests for buffer size, delivery buffer etc.
+//TODO: Extending classes must handle 'to offset' in a query manually. Restrict their responsibility and move to QueryActorPublisher??.
 /**
  * Abstract Query publisher. Can be integrated with Akka Streams as a Source.
  * Intended to be extended by concrete Query publisher classes. This class manages the stream lifecycle,
@@ -24,7 +33,7 @@ import akka.stream.actor.ActorPublisherMessage.{Cancel, Request, SubscriptionTim
  * @tparam MessageType Type of message.
  * @tparam State Type of state.
  */
-private[query] abstract class QueryActorPublisher[MessageType, State](
+private[query] abstract class QueryActorPublisher[MessageType, State, FetchType : ClassTag](
     refreshInterval: Option[FiniteDuration],
     maxBufferSize: Int)
   extends ActorPublisher[MessageType]
@@ -35,11 +44,19 @@ private[query] abstract class QueryActorPublisher[MessageType, State](
   private[this] case object Continue
 
   private[this] val tickTask =
-    refreshInterval.map(i => context.system.scheduler.schedule(i, i, self, Continue)(context.dispatcher))
+    refreshInterval.map{
+      i => context.system.scheduler.schedule(i, i, self, Continue)(context.dispatcher)
+    }
 
   override def postStop(): Unit = {
     tickTask.map(_.cancel())
     super.postStop()
+  }
+
+  override val supervisorStrategy = OneForOneStrategy() {
+    case e =>
+      self ! ReplayFailed(e)
+      SupervisorStrategy.Stop
   }
 
   override def receive: Receive = starting
@@ -79,9 +96,20 @@ private[query] abstract class QueryActorPublisher[MessageType, State](
   private[this] def requesting(buffer: Vector[MessageType], state: State): Receive = {
     case _: Cancel | SubscriptionTimeoutExceeded => context.stop(self)
     case Request(_) => context.become(requesting(deliverBuf(buffer), state))
-    case More(newBuffer) =>
+    case r: FetchType =>
+      val (updatedBuffer, updatedState) = updateBuffer(buffer, r, state)
+      context.become(requesting(updatedBuffer, updatedState))
+    case ReplayDone =>
+      // TODO: Correct (states especially)?
+      context.become(nextBehavior(deliverBuf(buffer), state, Some(state)))
+    case ReplayFailed(cause) =>
+      log.debug("Query failed due to [{}]", cause.getMessage)
+      // TODO: Will deliver all?
+      deliverBuf(buffer)
+      onErrorThenStop(cause)
+    /*case More(newBuffer) =>
       val (updatedBuffer, updatedState) = updateBuffer(buffer, newBuffer, state)
-      context.become(nextBehavior(deliverBuf(updatedBuffer), updatedState, Some(state)))
+      context.become(nextBehavior(deliverBuf(updatedBuffer), updatedState, Some(state)))*/
   }
 
   // Impure. Uses env and side effects.
@@ -102,7 +130,7 @@ private[query] abstract class QueryActorPublisher[MessageType, State](
     }
 
   private[this] def requestMore(state: State, max: Long)(implicit ec: ExecutionContext): Unit =
-    query(state, max).map(More).pipeTo(self)
+    context.actorOf(query(state, max))
 
   private [this] def stateChanged(state: State, oldState: Option[State]): Boolean =
     oldState.fold(true)(state != _)
@@ -117,13 +145,12 @@ private[query] abstract class QueryActorPublisher[MessageType, State](
   private[this] def shouldComplete(buffer: Vector[MessageType], refreshInterval: Option[FiniteDuration], newState: State, oldState: Option[State] = None) =
     bufferEmptyAndStateUnchanged(buffer, newState, oldState) && (!refreshInterval.isDefined || completionCondition(newState))
 
-
   /**
    * To be implemented by subclasses to define initial state, query, state update when query result
    * is received and completion condition.
    */
-  protected def query(state: State, max: Long): Future[Vector[MessageType]]
+  protected def query(state: State, max: Long): Props
   protected def initialState: State
-  protected def updateBuffer(buf: Vector[MessageType], newBuf: Vector[MessageType], state: State): (Vector[MessageType], State)
+  protected def updateBuffer(buf: Vector[MessageType], newBuf: FetchType, state: State): (Vector[MessageType], State)
   protected def completionCondition(state: State): Boolean
 }
