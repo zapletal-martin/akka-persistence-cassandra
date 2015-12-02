@@ -12,8 +12,6 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.persistence.PersistentActor
 import akka.persistence.PersistentRepr
 import akka.persistence.cassandra.CassandraLifecycle
 import akka.persistence.cassandra.journal.CassandraJournalConfig

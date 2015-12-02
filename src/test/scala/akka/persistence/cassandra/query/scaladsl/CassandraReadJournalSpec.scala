@@ -60,5 +60,6 @@ class CassandraReadJournalSpec
       val src = queries.currentEventsByPersistenceId("b", 0L, Long.MaxValue)
       src.runWith(Sink.head).map(_.persistenceId).futureValue.shouldEqual("b")
     }
+
   }
 }
