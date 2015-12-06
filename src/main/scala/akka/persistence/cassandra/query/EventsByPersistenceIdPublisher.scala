@@ -45,7 +45,7 @@ private[query] class EventsByPersistenceIdPublisher(
       newBuffer: PersistentRepr,
       state: Long): (Vector[EventEnvelope], Long) = {
 
-    val addToBuffer = toEventEnvelope(newBuffer, state)
+    val addToBuffer = toEventEnvelope(newBuffer, newBuffer.sequenceNr)
     val newState = newBuffer.sequenceNr + 1
 
     (buffer :+ addToBuffer, newState)

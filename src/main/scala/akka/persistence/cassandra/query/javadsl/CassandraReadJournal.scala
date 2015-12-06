@@ -156,10 +156,10 @@ class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query
     * `persistenceId` that persisted the event. The `persistenceId` + `sequenceNr` is an unique
     * identifier for the event.
     *
-    * The events are ordered by `sequenceNr` and `offset`. Causality is guaranteed (`sequenceNr`s of
-    * events for a particular `persistenceId` are always ordered in a sequence monotonically
-    * increasing by one). Multiple executions of the same bounded stream are guaranteed to
-    * emit exactly the same stream of events.
+    * `sequenceNr` and `offset` are always the same for an event and they define ordering for events
+    * emitted by this query. Causality is guaranteed (`sequenceNr`s of events for a particular
+    * `persistenceId` are always ordered in a sequence monotonically increasing by one). Multiple
+    * executions of the same bounded stream are guaranteed to emit exactly the same stream of events.
     *
     * `fromSequenceNr` and `toSequenceNr` can be specified to limit the set of returned events.
     * The `fromSequenceNr` and `toSequenceNr` are inclusive.
