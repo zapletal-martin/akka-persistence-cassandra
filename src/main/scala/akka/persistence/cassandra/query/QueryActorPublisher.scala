@@ -1,13 +1,11 @@
 package akka.persistence.cassandra.query
 
 import akka.actor._
-import akka.pattern.pipe
 import akka.persistence.cassandra.query.QueryActorPublisher.{ReplayFailed, ReplayDone}
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request, SubscriptionTimeoutExceeded}
 
 import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 
 object QueryActorPublisher {
@@ -100,16 +98,12 @@ private[query] abstract class QueryActorPublisher[MessageType, State, FetchType 
       val (updatedBuffer, updatedState) = updateBuffer(buffer, r, state)
       context.become(requesting(updatedBuffer, updatedState))
     case ReplayDone =>
-      // TODO: Correct (states especially)?
       context.become(nextBehavior(deliverBuf(buffer), state, Some(state)))
     case ReplayFailed(cause) =>
       log.debug("Query failed due to [{}]", cause.getMessage)
       // TODO: Will deliver all?
       deliverBuf(buffer)
       onErrorThenStop(cause)
-    /*case More(newBuffer) =>
-      val (updatedBuffer, updatedState) = updateBuffer(buffer, newBuffer, state)
-      context.become(nextBehavior(deliverBuf(updatedBuffer), updatedState, Some(state)))*/
   }
 
   // Impure. Uses env and side effects.
@@ -122,14 +116,13 @@ private[query] abstract class QueryActorPublisher[MessageType, State, FetchType 
       onCompleteThenStop()
       Actor.emptyBehavior
     } else if (shouldRequestMore(buffer, totalDemand, maxBufferSize, newState, oldState)) {
-      import context.dispatcher
       requestMore(newState, maxBufferSize.toLong - buffer.size)
       requesting(buffer, newState)
     } else {
       idle(buffer, newState)
     }
 
-  private[this] def requestMore(state: State, max: Long)(implicit ec: ExecutionContext): Unit =
+  private[this] def requestMore(state: State, max: Long): Unit =
     context.actorOf(query(state, max))
 
   private [this] def stateChanged(state: State, oldState: Option[State]): Boolean =

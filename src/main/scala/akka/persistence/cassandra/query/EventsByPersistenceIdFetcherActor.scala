@@ -3,29 +3,33 @@ package akka.persistence.cassandra.query
 import java.lang.{Long => JLong}
 import java.nio.ByteBuffer
 
+
 import scala.annotation.tailrec
-import scala.concurrent.{Promise, Future}
+import scala.concurrent.Future
 
 import akka.actor._
 import akka.persistence.PersistentRepr
 import akka.pattern.pipe
-import akka.persistence.cassandra.query.QueryActorPublisher.ReplayDone
 import akka.serialization.{SerializationExtension, Serialization}
 import com.datastax.driver.core.utils.Bytes
-import com.datastax.driver.core.{Row, PreparedStatement, Session, ResultSet}
+import com.datastax.driver.core.{Row, PreparedStatement, ResultSet}
 
 import akka.persistence.cassandra.listenableFutureToFuture
+import akka.persistence.cassandra.query.QueryActorPublisher.ReplayDone
+import akka.persistence.cassandra.query.EventsByPersistenceIdFetcherActor._
+import akka.persistence.cassandra.query.EventsByPersistenceIdPublisher.EventsByPersistenceIdSession
 
 private[query] object EventsByPersistenceIdFetcherActor {
+  private sealed trait Action
+  private final case class StreamResultSet(
+      partitionNr: Long, from: Long, rs: ResultSet) extends Action
+  private case object Finished extends Action with DeadLetterSuppression
+
   def props(
-      persistenceId: String, from: Long, to: Long, maxBufferSize: Int, targetPartitionSize: Int,
-      replyTo: ActorRef, session: Session, preparedSelectMessages: PreparedStatement,
-      preparedCheckInUse: PreparedStatement, preparedSelectDeletedTo: PreparedStatement,
-      settings: CassandraReadJournalConfig): Props =
+      persistenceId: String, from: Long, to: Long, replyTo: ActorRef,
+      session: EventsByPersistenceIdSession, settings: CassandraReadJournalConfig): Props =
     Props(
-      new EventsByPersistenceIdFetcherActor(
-        persistenceId, from, to, maxBufferSize, targetPartitionSize, replyTo, session,
-        preparedSelectMessages, preparedCheckInUse, preparedSelectDeletedTo, settings))
+      new EventsByPersistenceIdFetcherActor(persistenceId, from, to, replyTo, session, settings))
       .withDispatcher(settings.pluginDispatcher)
 }
 
@@ -34,23 +38,16 @@ private[query] object EventsByPersistenceIdFetcherActor {
   * Iterates over messages, crossing partition boundaries.
   */
 private[query] class EventsByPersistenceIdFetcherActor(
-    persistenceId: String, from: Long, to: Long, maxBufferSize: Int, targetPartitionSize: Int,
-    replyTo: ActorRef, session: Session, preparedSelectMessages: PreparedStatement,
-    preparedCheckInUse: PreparedStatement, preparedSelectDeletedTo: PreparedStatement,
-    settings: CassandraReadJournalConfig) extends Actor {
-
-  private[this] sealed trait Action
-  private[this] final case class StreamResultSet(
-      partitionNr: Long, from: Long, rs: ResultSet) extends Action
-  private[this] case object Finished extends Action with DeadLetterSuppression
+    persistenceId: String, from: Long, to: Long, replyTo: ActorRef,
+    session: EventsByPersistenceIdSession, settings: CassandraReadJournalConfig) extends Actor {
 
   import context.dispatcher
 
   private[this] val serialization = SerializationExtension(context.system)
 
   override def preStart(): Unit = {
-    highestDeletedSequenceNumber(persistenceId, preparedSelectDeletedTo).flatMap{ f =>
-      val currentPnr = partitionNr(math.max(f + 1, from), targetPartitionSize)
+    highestDeletedSequenceNumber(persistenceId, session.selectDeletedTo).flatMap{ f =>
+      val currentPnr = partitionNr(math.max(f + 1, from), settings.targetPartitionSize)
       query(currentPnr, from, to)
     }.pipeTo(self)
   }
@@ -69,10 +66,10 @@ private[query] class EventsByPersistenceIdFetcherActor(
 
   private[this] def query(partitionNr: Long, from: Long, to: Long): Future[StreamResultSet] = {
     val boundStatement =
-      preparedSelectMessages.bind(persistenceId, partitionNr: JLong, from: JLong, to: JLong)
-    boundStatement.setFetchSize(maxBufferSize)
+      session.selectEventsByPersistenceId.bind(persistenceId, partitionNr: JLong, from: JLong, to: JLong)
+    boundStatement.setFetchSize(settings.fetchSize)
 
-    listenableFutureToFuture(session.executeAsync(boundStatement))
+    listenableFutureToFuture(session.session.executeAsync(boundStatement))
       .map(StreamResultSet(partitionNr + 1, from, _))
   }
 
@@ -80,7 +77,7 @@ private[query] class EventsByPersistenceIdFetcherActor(
     if(resultSet.isExhausted) {
       inUse(persistenceId, partitionNr).flatMap { i =>
         if (i && from < to) query(partitionNr, from, to)
-        else Promise.successful(Finished).future
+        else Future.successful(Finished)
       }
     } else {
       val (fr, rs) = exhaustFetch(resultSet, from, resultSet.getAvailableWithoutFetching)
@@ -101,13 +98,13 @@ private[query] class EventsByPersistenceIdFetcherActor(
   private[this] def highestDeletedSequenceNumber(
       partitionKey: String,
       preparedSelectDeletedTo: PreparedStatement): Future[Long] = {
-    listenableFutureToFuture(session.executeAsync(preparedSelectDeletedTo.bind(partitionKey)))
+    listenableFutureToFuture(session.session.executeAsync(preparedSelectDeletedTo.bind(partitionKey)))
       .map(r => Option(r.one()).map(_.getLong("deleted_to")).getOrElse(0))
   }
 
   private[this] def inUse(persistenceId: String, currentPnr: Long): Future[Boolean] = {
-    session
-      .executeAsync(preparedCheckInUse.bind(persistenceId, currentPnr: JLong))
+    session.session
+      .executeAsync(session.selectInUse.bind(persistenceId, currentPnr: JLong))
       .map(rs => if (rs.isExhausted) false else rs.one().getBool("used"))
   }
 

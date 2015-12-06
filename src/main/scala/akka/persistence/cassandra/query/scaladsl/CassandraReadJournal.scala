@@ -6,6 +6,7 @@ import akka.actor.ExtendedActorSystem
 import akka.persistence.cassandra.journal.CassandraJournal
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 import akka.persistence.cassandra.journal.CassandraStatements
+import akka.persistence.cassandra.query.EventsByPersistenceIdPublisher.EventsByPersistenceIdSession
 import akka.persistence.cassandra.query._
 import akka.persistence.query._
 import akka.persistence.query.scaladsl._
@@ -94,7 +95,7 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
 
     val preparedSelectEventsByPersistenceId: PreparedStatement =
       session
-        .prepare(queryStatements.selectMessages)
+        .prepare(writeStatements.selectMessages)
         .setConsistencyLevel(queryPluginConfig.readConsistency)
 
     val preparedSelectInUse: PreparedStatement =
@@ -324,12 +325,11 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         fromSequenceNr,
         toSequenceNr,
         refreshInterval,
-        queryPluginConfig.maxBufferSize,
-        queryPluginConfig.targetPartitionSize,
-        cassandraSession.preparedSelectEventsByPersistenceId,
-        cassandraSession.preparedSelectInUse,
-        cassandraSession.preparedSelectDeletedTo,
-        cassandraSession.session,
+        EventsByPersistenceIdSession(
+          cassandraSession.preparedSelectEventsByPersistenceId,
+          cassandraSession.preparedSelectInUse,
+          cassandraSession.preparedSelectDeletedTo,
+          cassandraSession.session),
         queryPluginConfig))
       .mapMaterializedValue(_ => ())
       .named(name)
