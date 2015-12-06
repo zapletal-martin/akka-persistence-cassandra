@@ -16,4 +16,8 @@ private[query] trait CassandraReadStatements {
         ORDER BY timestamp ASC
         LIMIT ?
     """
+
+  def selectDistinctPersistenceIds = s"""
+      SELECT DISTINCT persistenceId FROM $tableName
+     """
 }

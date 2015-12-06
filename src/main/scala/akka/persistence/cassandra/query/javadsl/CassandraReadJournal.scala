@@ -1,6 +1,5 @@
 package akka.persistence.cassandra.query.javadsl
 
-import scala.concurrent.duration._
 import akka.persistence.query.EventEnvelope
 import akka.persistence.query.javadsl._
 import akka.stream.javadsl.Source
@@ -36,6 +35,8 @@ object CassandraReadJournal {
  */
 class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query.scaladsl.CassandraReadJournal)
   extends ReadJournal
+  with AllPersistenceIdsQuery
+  with CurrentPersistenceIdsQuery
   with EventsByPersistenceIdQuery
   with CurrentEventsByPersistenceIdQuery
   with EventsByTagQuery
@@ -187,5 +188,9 @@ class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query
       fromSequenceNr: Long,
       toSequenceNr: Long): Source[EventEnvelope, Unit] =
     scaladslReadJournal.currentEventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr).asJava
+
+  def allPersistenceIds(): Source[String,Unit] = scaladslReadJournal.allPersistenceIds()
+
+  def currentPersistenceIds(): Source[String,Unit] = scaladslReadJournal.currentPersistenceIds()
 }
 

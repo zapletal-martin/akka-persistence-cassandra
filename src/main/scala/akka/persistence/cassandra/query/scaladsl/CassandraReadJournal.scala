@@ -3,12 +3,12 @@ package akka.persistence.cassandra.query.scaladsl
 import java.net.URLEncoder
 import java.util.UUID
 import akka.actor.ExtendedActorSystem
-import akka.persistence.cassandra.journal.CassandraJournal
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 import akka.persistence.cassandra.journal.CassandraStatements
 import akka.persistence.cassandra.query.EventsByPersistenceIdPublisher.EventsByPersistenceIdSession
 import akka.persistence.cassandra.query._
 import akka.persistence.query._
+import akka.persistence.query.javadsl.{CurrentPersistenceIdsQuery, AllPersistenceIdsQuery}
 import akka.persistence.query.scaladsl._
 import akka.stream.ActorAttributes
 import akka.stream.scaladsl.Source
@@ -50,6 +50,8 @@ object CassandraReadJournal {
  */
 class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   extends ReadJournal
+  with AllPersistenceIdsQuery
+  with CurrentPersistenceIdsQuery
   with EventsByPersistenceIdQuery
   with CurrentEventsByPersistenceIdQuery
   with EventsByTagQuery
@@ -106,6 +108,11 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
     val preparedSelectDeletedTo =
       session
         .prepare(writeStatements.selectDeletedTo)
+        .setConsistencyLevel(queryPluginConfig.readConsistency)
+
+    val preparedSelectDistinctPersistenceIds =
+      session
+        .prepare(queryStatements.selectDistinctPersistenceIds)
         .setConsistencyLevel(queryPluginConfig.readConsistency)
   }
 
@@ -333,5 +340,9 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         queryPluginConfig))
       .mapMaterializedValue(_ => ())
       .named(name)
+
+    def allPersistenceIds(): Source[String,Unit] = ???
+
+    def currentPersistenceIds(): Source[String,Unit] = ???
   }
 }
