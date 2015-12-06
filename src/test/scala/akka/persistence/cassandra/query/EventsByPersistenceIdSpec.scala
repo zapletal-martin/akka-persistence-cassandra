@@ -227,9 +227,9 @@ class EventsByPersistenceIdSpec
       src.map(x => (x.persistenceId, x.sequenceNr, x.offset)).runWith(TestSink.probe[Any])
         .request(3)
         .expectNext(
-          ("l", 1, 0),
-          ("l", 2, 1),
-          ("l", 3, 2))
+          ("l", 1, 1),
+          ("l", 2, 2),
+          ("l", 3, 3))
         .expectComplete()
     }
 
