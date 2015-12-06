@@ -1,6 +1,6 @@
 package akka.persistence.cassandra.query
 
-trait CassandraReadStatements {
+private[query] trait CassandraReadStatements {
 
   def config: CassandraReadJournalConfig
 
