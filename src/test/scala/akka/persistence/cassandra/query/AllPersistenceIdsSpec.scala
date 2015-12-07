@@ -101,22 +101,6 @@ class AllPersistenceIdsSpec
         setup(UUID.randomUUID().toString, 1)
       }
 
-      /*setup("a", 1)
-      setup("b", 1)
-      setup("c", 1)
-      setup("d", 1)
-      setup("e", 1)
-      setup("f", 1)
-      setup("g", 1)
-      setup("h", 1)
-      setup("i", 1)
-      setup("j", 1)
-      setup("k", 1)
-      setup("l", 1)
-      setup("m", 1)
-      setup("n", 1)
-      setup("o", 1)*/
-
       val src = queries.currentPersistenceIds()
       val probe = src.runWith(TestSink.probe[Any])
       probe.request(1000)
@@ -124,8 +108,6 @@ class AllPersistenceIdsSpec
       for(i <- 1 to 1000) {
         probe.expectNext()
       }
-
-      //probe.expectNextUnordered("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o")
 
       probe.expectComplete()
     }
