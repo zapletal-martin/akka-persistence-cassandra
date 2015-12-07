@@ -18,6 +18,6 @@ private[query] trait CassandraReadStatements {
     """
 
   def selectDistinctPersistenceIds = s"""
-      SELECT DISTINCT persistenceId FROM $tableName
+      SELECT DISTINCT persistence_id, partition_nr FROM $tableName
      """
 }

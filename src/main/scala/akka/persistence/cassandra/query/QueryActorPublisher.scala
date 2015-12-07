@@ -1,7 +1,7 @@
 package akka.persistence.cassandra.query
 
 import akka.actor._
-import akka.persistence.cassandra.query.QueryActorPublisher.{ReplayFailed, ReplayDone}
+import akka.persistence.cassandra.query.QueryActorPublisher.ReplayFailed
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request, SubscriptionTimeoutExceeded}
 
@@ -9,7 +9,6 @@ import scala.concurrent.duration.FiniteDuration
 import scala.reflect.ClassTag
 
 object QueryActorPublisher {
-  private[query] case object ReplayDone extends DeadLetterSuppression
   private[query] final case class ReplayFailed(cause: Throwable)
     extends DeadLetterSuppression with NoSerializationVerificationNeeded
 }
@@ -31,7 +30,8 @@ object QueryActorPublisher {
  * @tparam MessageType Type of message.
  * @tparam State Type of state.
  */
-private[query] abstract class QueryActorPublisher[MessageType, State, FetchType : ClassTag](
+//TODO: FIX DOC
+private[query] abstract class QueryActorPublisher[MessageType, State, FetchType : ClassTag, ReplayDone : ClassTag](
     refreshInterval: Option[FiniteDuration],
     maxBufferSize: Int)
   extends ActorPublisher[MessageType]
@@ -97,8 +97,9 @@ private[query] abstract class QueryActorPublisher[MessageType, State, FetchType 
     case r: FetchType =>
       val (updatedBuffer, updatedState) = updateBuffer(buffer, r, state)
       context.become(requesting(updatedBuffer, updatedState))
-    case ReplayDone =>
-      context.become(nextBehavior(deliverBuf(buffer), state, Some(state)))
+    case d: ReplayDone =>
+      val updatedState = updateState(state, d)
+      context.become(nextBehavior(deliverBuf(buffer), updatedState, Some(state)))
     case ReplayFailed(cause) =>
       log.debug("Query failed due to [{}]", cause.getMessage)
       // TODO: Will deliver all?
@@ -142,8 +143,9 @@ private[query] abstract class QueryActorPublisher[MessageType, State, FetchType 
    * To be implemented by subclasses to define initial state, query, state update when query result
    * is received and completion condition.
    */
-  protected def query(state: State, max: Long): Props
   protected def initialState: State
+  protected def query(state: State, max: Long): Props
   protected def updateBuffer(buf: Vector[MessageType], newBuf: FetchType, state: State): (Vector[MessageType], State)
+  protected def updateState(state: State, replayDone: ReplayDone): State
   protected def completionCondition(state: State): Boolean
 }

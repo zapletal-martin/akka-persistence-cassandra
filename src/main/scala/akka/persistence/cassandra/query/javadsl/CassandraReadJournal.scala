@@ -187,10 +187,13 @@ class CassandraReadJournal(scaladslReadJournal: akka.persistence.cassandra.query
       persistenceId: String,
       fromSequenceNr: Long,
       toSequenceNr: Long): Source[EventEnvelope, Unit] =
-    scaladslReadJournal.currentEventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr).asJava
+    scaladslReadJournal
+      .currentEventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr)
+      .asJava
 
-  def allPersistenceIds(): Source[String,Unit] = scaladslReadJournal.allPersistenceIds()
+  def allPersistenceIds(): Source[String, Unit] = scaladslReadJournal.allPersistenceIds().asJava
 
-  def currentPersistenceIds(): Source[String,Unit] = scaladslReadJournal.currentPersistenceIds()
+  def currentPersistenceIds(): Source[String, Unit] =
+    scaladslReadJournal.currentPersistenceIds().asJava
 }
 

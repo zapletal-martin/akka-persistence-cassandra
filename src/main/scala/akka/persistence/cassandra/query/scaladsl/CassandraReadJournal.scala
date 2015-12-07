@@ -5,10 +5,10 @@ import java.util.UUID
 import akka.actor.ExtendedActorSystem
 import akka.persistence.cassandra.journal.CassandraJournalConfig
 import akka.persistence.cassandra.journal.CassandraStatements
+import akka.persistence.cassandra.query.AllPersistenceIdsPublisher.AllPersistenceIdsSession
 import akka.persistence.cassandra.query.EventsByPersistenceIdPublisher.EventsByPersistenceIdSession
 import akka.persistence.cassandra.query._
 import akka.persistence.query._
-import akka.persistence.query.javadsl.{CurrentPersistenceIdsQuery, AllPersistenceIdsQuery}
 import akka.persistence.query.scaladsl._
 import akka.stream.ActorAttributes
 import akka.stream.scaladsl.Source
@@ -299,14 +299,13 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
   override def eventsByPersistenceId(
       persistenceId: String,
       fromSequenceNr: Long,
-      toSequenceNr: Long): Source[EventEnvelope, Unit] = {
-
+      toSequenceNr: Long): Source[EventEnvelope, Unit] =
     eventsByPersistenceId(
       persistenceId,
       fromSequenceNr,
       toSequenceNr,
-      Some(queryPluginConfig.refreshInterval))
-  }
+      Some(queryPluginConfig.refreshInterval),
+      s"eventsByPersistenceId-$persistenceId")
 
   /**
    * Same type of query as `eventsByPersistenceId` but the event stream
@@ -317,14 +316,19 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
       persistenceId: String,
       fromSequenceNr: Long,
       toSequenceNr: Long): Source[EventEnvelope, Unit] =
-    eventsByPersistenceId(persistenceId, fromSequenceNr, toSequenceNr, None)
+    eventsByPersistenceId(
+      persistenceId,
+      fromSequenceNr,
+      toSequenceNr,
+      None,
+      s"currentEventsByPersistenceId-$persistenceId")
 
   private[this] def eventsByPersistenceId(
     persistenceId: String,
     fromSequenceNr: Long,
     toSequenceNr: Long,
-    refreshInterval: Option[FiniteDuration]) = {
-    val name = s"eventsByPersistenceId-$persistenceId"
+    refreshInterval: Option[FiniteDuration],
+    name: String) = {
 
     Source.actorPublisher[EventEnvelope](
       EventsByPersistenceIdPublisher.props(
@@ -340,9 +344,24 @@ class CassandraReadJournal(system: ExtendedActorSystem, config: Config)
         queryPluginConfig))
       .mapMaterializedValue(_ => ())
       .named(name)
-
-    def allPersistenceIds(): Source[String,Unit] = ???
-
-    def currentPersistenceIds(): Source[String,Unit] = ???
   }
+
+    def allPersistenceIds(): Source[String, Unit] =
+      persistenceIds(Some(queryPluginConfig.refreshInterval), "allPersistenceIds")
+
+    def currentPersistenceIds(): Source[String, Unit] =
+      persistenceIds(None, "currentPersistenceIds")
+
+    private[this] def persistenceIds(
+        refreshInterval: Option[FiniteDuration],
+        name: String): Source[String, Unit] =
+      Source.actorPublisher[String](
+        AllPersistenceIdsPublisher.props(
+          refreshInterval,
+          AllPersistenceIdsSession(
+            cassandraSession.preparedSelectDistinctPersistenceIds,
+            cassandraSession.session),
+          queryPluginConfig))
+        .mapMaterializedValue(_ => ())
+        .named(name)
 }
